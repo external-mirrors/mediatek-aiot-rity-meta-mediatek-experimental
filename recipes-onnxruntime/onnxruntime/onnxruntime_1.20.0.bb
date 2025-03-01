@@ -20,11 +20,16 @@ T = "${WORKDIR}/git"
 inherit python3native cmake
 
 SRC_URI = "gitsm://github.com/microsoft/onnxruntime.git;protocol=https;branch=rel-${PV};name=onnxruntime \
+           file://0001-add_reference_pointer_to_op_schema.patch \
            file://efficientnet-lite4/efficientnet-lite4.onnx \
            file://onnxruntime_example/onnxruntime_test.py \
            file://onnxruntime_example/labels_map.txt \
            file://onnxruntime_example/kitten.jfif \
            "
+do_patch() {
+        cd ${WORKDIR}/git
+        patch -p1 < ${WORKDIR}/0001-add_reference_pointer_to_op_schema.patch
+}
 
 DEPENDS += " \
 	cmake-native \
@@ -35,7 +40,7 @@ DEPENDS += " \
 	python3-numpy-native \
 "
 
-PREFERRED_VERSION_CMAKE="3.26.4"
+PREFERRED_VERSION_PROTOBUF="3.19.6"
 
 EXTRA_OECMAKE=" \
 	-DCMAKE_BUILD_TYPE=Release \
@@ -49,10 +54,11 @@ EXTRA_OECMAKE=" \
 	-DCMAKE_FIND_ROOT_PATH=${STAGING_DIR_TARGET} \
 	-Donnxruntime_BUILD_SHARED_LIB=ON \
 	-Donnxruntime_DEV_MODE=OFF \
-	-Donnxruntime_ENABLE_PYTHON=ON \
+ 	-Donnxruntime_ENABLE_PYTHON=ON \
     -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
     -Donnxruntime_BUILD_UNIT_TESTS=OFF \
 	-Donnxruntime_USE_XNNPACK=ON \
+    -DONNX_WERROR=OFF \
 " 
 
 # Workaround for network access issue during compile step
@@ -67,16 +73,21 @@ do_install() {
 	cp --parents \
 		$(find . -name "*.so") \
 		${D}/${libdir}
+    
+    cp --parents \
+		$(find . -name "*.a") \
+		${D}/${libdir}
 
-	install -d ${D}/home/root/onnxruntime_example
 
-    install -m 644 ${WORKDIR}/efficientnet-lite4/efficientnet-lite4.onnx ${D}/home/root/onnxruntime_example
+	install -d ${D}${ROOT_HOME}/onnxruntime_example
 
-	install -m 644 ${WORKDIR}/onnxruntime_example/labels_map.txt ${D}/home/root/onnxruntime_example
+    install -m 644 ${WORKDIR}/efficientnet-lite4/efficientnet-lite4.onnx ${D}${ROOT_HOME}/onnxruntime_example
 
-	install -m 644 ${WORKDIR}/onnxruntime_example/kitten.jfif ${D}/home/root/onnxruntime_example
+	install -m 644 ${WORKDIR}/onnxruntime_example/labels_map.txt ${D}${ROOT_HOME}/onnxruntime_example
 
-	install -m 644 ${WORKDIR}/onnxruntime_example/onnxruntime_test.py ${D}/home/root/onnxruntime_example
+	install -m 644 ${WORKDIR}/onnxruntime_example/kitten.jfif ${D}${ROOT_HOME}/onnxruntime_example
+
+	install -m 644 ${WORKDIR}/onnxruntime_example/onnxruntime_test.py ${D}${ROOT_HOME}/onnxruntime_example
 
 
 	install -d ${D}${libdir}/${PYTHON_DIR}/site-packages
@@ -97,7 +108,7 @@ FILES:${PN}-staticdev = " \
 
 FILES:${PN}-examples = " \
 	${bindir}/${PN} \
-	/home/root/onnxruntime_example \
+	${ROOT_HOME}/onnxruntime_example \
 "
 
 FILES:python3-${PN} = " \
@@ -105,6 +116,3 @@ FILES:python3-${PN} = " \
 	${libdir}/${PYTHON_DIR}/site-packages \
 	${libdir}/${PYTHON_DIR}/site-packages/onnxruntime \
 "
-
-
-

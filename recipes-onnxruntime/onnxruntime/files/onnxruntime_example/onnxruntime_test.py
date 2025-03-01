@@ -63,7 +63,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", "-i", default='kitten.jfif', help="path of image to be processed")
     parser.add_argument("--labels","-l", default='labels_map.txt', help="path to file containing labels")
-    parser.add_argument("--model", "-m", default='/home/root/efficientnet-lite4/efficientnet-lite4.onnx', help="Effecientnet-lite4 model path")
+    parser.add_argument("--model", "-m", default='/root/onnxruntime_example/efficientnet-lite4.onnx', help="Effecientnet-lite4 model path")
     parser.add_argument("--execution_provider","-e", default='CPUExecutionProvider', choices=['CPUExecutionProvider', 'XnnpackExecutionProvider'], help="specify onnxruntime execution provider" )
     parser.add_argument("--profiling", "-p", type=int, default=0, help="1 to enable model profiling, default is 0" )
     args = parser.parse_args()
