@@ -12,7 +12,7 @@ PACKAGES += "${PN}-examples ${PN}-examples-dbg"
 
 SRCREV_FORMAT = "onnxruntime"
 
-SRCREV_onnxruntime = "c4fb724e810bb496165b9015c77f402727392933"
+SRCREV_onnxruntime = "8608bf02f21774be0388d2aa3a9f886d009d0b4c"
 
 S = "${WORKDIR}/git/cmake"
 T = "${WORKDIR}/git"
@@ -50,10 +50,10 @@ EXTRA_OECMAKE=" \
 	-Donnxruntime_BUILD_SHARED_LIB=ON \
 	-Donnxruntime_DEV_MODE=OFF \
 	-Donnxruntime_ENABLE_PYTHON=ON \
-    -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
-    -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+	-DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
+	-Donnxruntime_BUILD_UNIT_TESTS=OFF \
 	-Donnxruntime_USE_XNNPACK=ON \
-" 
+"
 
 # Workaround for network access issue during compile step
 # this needs to be fixed in the recipes buildsystem to move
@@ -62,7 +62,7 @@ do_compile[network] = "1"
 
 do_install() {
 	install -d ${D}${libdir}
-    install -d ${D}${includedir}/core/providers
+	install -d ${D}${includedir}/core/providers
 
 	cp --parents \
 		$(find . -name "*.so") \
@@ -70,7 +70,7 @@ do_install() {
 
 	install -d ${D}/home/root/onnxruntime_example
 
-    install -m 644 ${WORKDIR}/efficientnet-lite4/efficientnet-lite4.onnx ${D}/home/root/onnxruntime_example
+	install -m 644 ${WORKDIR}/efficientnet-lite4/efficientnet-lite4.onnx ${D}/home/root/onnxruntime_example
 
 	install -m 644 ${WORKDIR}/onnxruntime_example/labels_map.txt ${D}/home/root/onnxruntime_example
 
