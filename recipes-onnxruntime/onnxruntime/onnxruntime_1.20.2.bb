@@ -12,7 +12,7 @@ PACKAGES += "${PN}-examples ${PN}-examples-dbg"
 
 SRCREV_FORMAT = "onnxruntime"
 
-SRCREV_onnxruntime = "c4fb724e810bb496165b9015c77f402727392933"
+SRCREV_onnxruntime = "8608bf02f21774be0388d2aa3a9f886d009d0b4c"
 
 S = "${WORKDIR}/git/cmake"
 T = "${WORKDIR}/git"
