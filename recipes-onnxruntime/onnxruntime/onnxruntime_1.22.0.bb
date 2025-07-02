@@ -12,7 +12,7 @@ PACKAGES += "${PN}-examples ${PN}-examples-dbg"
 
 SRCREV_FORMAT = "onnxruntime"
 
-SRCREV_onnxruntime = "8608bf02f21774be0388d2aa3a9f886d009d0b4c"
+SRCREV_onnxruntime = "f217402897f40ebba457e2421bc0a4702771968e"
 
 S = "${WORKDIR}/git/cmake"
 T = "${WORKDIR}/git"
@@ -20,16 +20,12 @@ T = "${WORKDIR}/git"
 inherit python3native cmake
 
 SRC_URI = "gitsm://github.com/microsoft/onnxruntime.git;protocol=https;branch=rel-${PV};name=onnxruntime \
-           file://0001-add_reference_pointer_to_op_schema.patch \
+           file://0001-update-eigen-sha1.patch \
            file://efficientnet-lite4/efficientnet-lite4.onnx \
            file://onnxruntime_example/onnxruntime_test.py \
            file://onnxruntime_example/labels_map.txt \
            file://onnxruntime_example/kitten.jfif \
            "
-do_patch() {
-        cd ${WORKDIR}/git
-        patch -p1 < ${WORKDIR}/0001-add_reference_pointer_to_op_schema.patch
-}
 
 DEPENDS += " \
 	cmake-native \
@@ -54,11 +50,12 @@ EXTRA_OECMAKE=" \
 	-DCMAKE_FIND_ROOT_PATH=${STAGING_DIR_TARGET} \
 	-Donnxruntime_BUILD_SHARED_LIB=ON \
 	-Donnxruntime_DEV_MODE=OFF \
- 	-Donnxruntime_ENABLE_PYTHON=ON \
-    -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
-    -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+        -Donnxruntime_ENABLE_PYTHON=ON \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
+        -Donnxruntime_BUILD_UNIT_TESTS=OFF \
 	-Donnxruntime_USE_XNNPACK=ON \
-    -DONNX_WERROR=OFF \
+        -DONNX_WERROR=OFF \
+        -Donnxruntime_USE_KLEIDIAI=ON \
 " 
 
 # Workaround for network access issue during compile step
@@ -68,20 +65,20 @@ do_compile[network] = "1"
 
 do_install() {
 	install -d ${D}${libdir}
-    install -d ${D}${includedir}/core/providers
+        install -d ${D}${includedir}/core/providers
 
 	cp --parents \
 		$(find . -name "*.so") \
 		${D}/${libdir}
     
-    cp --parents \
+        cp --parents \
 		$(find . -name "*.a") \
 		${D}/${libdir}
 
 
 	install -d ${D}${ROOT_HOME}/onnxruntime_example
 
-    install -m 644 ${WORKDIR}/efficientnet-lite4/efficientnet-lite4.onnx ${D}${ROOT_HOME}/onnxruntime_example
+        install -m 644 ${WORKDIR}/efficientnet-lite4/efficientnet-lite4.onnx ${D}${ROOT_HOME}/onnxruntime_example
 
 	install -m 644 ${WORKDIR}/onnxruntime_example/labels_map.txt ${D}${ROOT_HOME}/onnxruntime_example
 
