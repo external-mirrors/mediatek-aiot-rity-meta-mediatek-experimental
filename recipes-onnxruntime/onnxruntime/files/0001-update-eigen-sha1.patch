@@ -8,10 +8,10 @@ Signed-off-by: Suyash Narain <suyash.narain@mediatek.com>
  cmake/deps.txt | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/deps.txt b/deps.txt
+diff --git a/cmake/deps.txt b/cmake/deps.txt
 index 71218fd049..1406eec32e 100644
---- a/deps.txt
-+++ b/deps.txt
+--- a/cmake/deps.txt
++++ b/cmake/deps.txt
 @@ -22,7 +22,7 @@ dlpack;https://github.com/dmlc/dlpack/archive/refs/tags/v0.6.zip;4d565dd2e5b3132
  # it contains changes on top of 3.4.0 which are required to fix build issues.
  # Until the 3.4.1 release this is the best option we have.
