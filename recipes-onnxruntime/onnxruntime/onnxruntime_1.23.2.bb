@@ -20,7 +20,7 @@ OECMAKE_SOURCEPATH = "${S}/cmake"
 inherit python3native python3-dir cmake
 
 SRC_URI = "gitsm://github.com/microsoft/onnxruntime.git;protocol=https;branch=rel-${PV};name=onnxruntime \
-	   file://0001-update-eigen-sha1.patch \
+	   file://0001-fix-range-loop-copy.patch \
 	   file://efficientnet-lite4/efficientnet-lite4.onnx \
 	   file://onnxruntime_example/onnxruntime_test.py \
 	   file://onnxruntime_example/labels_map.txt \
@@ -60,7 +60,7 @@ EXTRA_OECMAKE=" \
 # Workaround for network access issue during compile step
 # this needs to be fixed in the recipes buildsystem to move
 # this such that it can be accomplished during do_fetch task
-do_compile[network] = "1"
+do_configure[network] = "1"
 
 do_install() {
 	install -d ${D}${libdir}
