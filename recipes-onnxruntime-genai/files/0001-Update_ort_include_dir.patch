@@ -1,0 +1,26 @@
+From 6a9257069243ddf694da3ebd9badf9518d7125ac Mon Sep 17 00:00:00 2001
+From: Suyash Narain <suyash.narain@mediatek.com>
+Date: Fri, 30 Jan 2026 13:43:10 -0800
+Subject: [PATCH] Update_ort_header_dir
+
+Signed-off-by: Suyash Narain <suyash.narain@mediatek.com>
+---
+ cmake/ortlib.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cmake/ortlib.cmake b/cmake/ortlib.cmake
+index abb60f10..6449eed7 100644
+--- a/cmake/ortlib.cmake
++++ b/cmake/ortlib.cmake
+@@ -76,7 +76,7 @@ if(ORT_HOME)
+     set(ORT_HEADER_DIR ${ORT_HOME}/include/onnxruntime)
+     set(ORT_LIB_DIR ${ORT_HOME}/lib)
+   else()
+-    set(ORT_HEADER_DIR ${ORT_HOME}/include)
++    set(ORT_HEADER_DIR ${ORT_HOME}/include/onnxruntime)
+     set(ORT_LIB_DIR ${ORT_HOME}/lib)
+   endif()
+ else()
+-- 
+2.34.1
+

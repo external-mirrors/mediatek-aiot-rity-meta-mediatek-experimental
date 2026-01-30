@@ -55,22 +55,26 @@ EXTRA_OECMAKE=" \
 	-Donnxruntime_BUILD_UNIT_TESTS=OFF \
 	-Donnxruntime_USE_XNNPACK=ON \
 	-DONNX_WERROR=OFF \
-" 
+"
 
-# Workaround for network access issue during compile step
+# Workaround for network access issue during configure step
 # this needs to be fixed in the recipes buildsystem to move
 # this such that it can be accomplished during do_fetch task
 do_configure[network] = "1"
 
 do_install() {
 	install -d ${D}${libdir}
-	install -d ${D}${includedir}/core/providers
+	install -d ${D}${includedir}/onnxruntime/core/
 	install -d ${D}${libdir} ${D}${PYTHON_SITEPACKAGES_DIR}
 	install -d ${D}${ROOT_HOME}/onnxruntime_example
 
 	for so in ${B}/libonnxruntime*.so* ${B}/libonnxruntime_providers*.so*; do
 	[ -f "$so" ] && install -m 0644 "$so" ${D}${libdir}/
 	done 
+
+	# copied below for onnxruntime-genai includedir path
+	cp -r ${S}/include/onnxruntime/core/* ${D}${includedir}/onnxruntime/core/
+	cp -r ${S}/include/onnxruntime/core/session/* ${D}${includedir}/onnxruntime/
 
 	cp -r ${B}/onnxruntime ${D}${PYTHON_SITEPACKAGES_DIR}/
 
@@ -80,7 +84,6 @@ do_install() {
 	install -m 644 ${WORKDIR}/onnxruntime_example/onnxruntime_test.py ${D}${ROOT_HOME}/onnxruntime_example
 }
 
-
 FILES_SOLIBSDEV = ""
 
 FILES:${PN} += " \
@@ -88,6 +91,11 @@ FILES:${PN} += " \
 	${libdir}/libonnxruntime*.so* \
 	${libdir}/libonnxruntime_providers*.so* \
 "
+
+FILES:${PN}-dev += " \
+	${includedir}/onnxruntime/* \
+"
+
 FILES:${PN}-staticdev = " \
 	${libdir}/*.a \
 "
