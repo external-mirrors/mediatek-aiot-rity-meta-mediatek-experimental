@@ -1,0 +1,521 @@
+From 0eb686dca70e5eb1714667202c4fbbeb4db75c9d Mon Sep 17 00:00:00 2001
+From: Anan Sun <anan.sun@mediatek.com>
+Date: Fri, 2 Jul 2021 13:45:18 +0800
+Subject: [PATCH 4/4] libion: Add MediaTek AOSP ION header file
+
+Add Mediatek AOSP ION header file and definations
+1. define MTK_AOSP_LIBION for AOSP ION
+2. define ION's heaps name
+
+Signed-off-by: Anan Sun <anan.sun@mediatek.com>
+---
+ libion/Makefile                        |   1 +
+ libion/include/ion/ion.h               |   9 ++
+ libion/ion.c                           | 195 +++++++++++++++++++++++--
+ libion/kernel-headers/linux/ion_4.12.h | 125 ++++++++++++++++
+ libion/kernel-headers/linux/ion_mtk.h  |  53 ++++++-
+ 5 files changed, 371 insertions(+), 12 deletions(-)
+ create mode 100644 libion/kernel-headers/linux/ion_4.12.h
+
+diff --git a/libion/Makefile b/libion/Makefile
+index 9112288cdd..0ed3b747fc 100644
+--- a/libion/Makefile
++++ b/libion/Makefile
+@@ -23,4 +23,5 @@ install:
+ 	install -m 444 ${SRCDIR}/libion/include/ion/ion.h ${DESTDIR}${INCDIR}/ion/ion.h
+ 	install -d ${DESTDIR}${INCDIR}/linux
+ 	install -m 444 ${SRCDIR}/libion/kernel-headers/linux/ion.h ${DESTDIR}${INCDIR}/linux/ion.h
++	install -m 444 ${SRCDIR}/libion/kernel-headers/linux/ion_4.12.h ${DESTDIR}${INCDIR}/linux/ion_4.12.h
+ 	install -m 444 ${SRCDIR}/libion/kernel-headers/linux/ion_mtk.h ${DESTDIR}${INCDIR}/linux/ion_mtk.h
+diff --git a/libion/include/ion/ion.h b/libion/include/ion/ion.h
+index e1f55f68e2..5f57f874c4 100644
+--- a/libion/include/ion/ion.h
++++ b/libion/include/ion/ion.h
+@@ -44,6 +44,15 @@ int ion_map(int fd, ion_user_handle_t handle, size_t length, int prot,
+ int ion_share(int fd, ion_user_handle_t handle, int *share_fd);
+ int ion_import(int fd, int share_fd, ion_user_handle_t *handle);
+ 
++/**
++  * Add 4.12+ kernel ION interfaces here for forward compatibility
++  * This should be needed till the pre-4.12+ ION interfaces are backported.
++  */
++int ion_query_heap_cnt(int fd, int* cnt);
++int ion_query_get_heaps(int fd, int cnt, void* buffers);
++
++int ion_is_legacy(int fd);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/libion/ion.c b/libion/ion.c
+index bf4dec20bf..dcf959d2ae 100644
+--- a/libion/ion.c
++++ b/libion/ion.c
+@@ -22,6 +22,8 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <linux/ion.h>
++#include <stdatomic.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
+@@ -30,18 +32,24 @@
+ #include <unistd.h>
+ 
+ #include <ion/ion.h>
++#include <linux/ion_4.12.h>
+ /* #include <log/log.h> */
+ 
+ #define ALOGE(format, arg...) \
+ 	    do { \
+-                dprintf(0, "%s" format"\n", "LIBION", ##arg);  \
++                dprintf(0, "[ION] " format"\n", ##arg);  \
+         } while (0)
+ 
++int ion_is_legacy(int fd) {
++    /* force to return MODERN ION version */
++    return 0;
++}
++
+ int ion_open()
+ {
+     int fd = open("/dev/ion", O_RDONLY | O_CLOEXEC);
+     if (fd < 0)
+-        ALOGE("open /dev/ion failed!\n");
++        ALOGE("open /dev/ion failed: %s", strerror(errno));
+     return fd;
+ }
+ 
+@@ -75,12 +83,12 @@ int ion_alloc(int fd, size_t len, size_t align, unsigned int heap_mask,
+         .flags = flags,
+     };
+ 
+-    if (handle == NULL)
+-        return -EINVAL;
++    if ((handle == NULL) || (!ion_is_legacy(fd))) return -EINVAL;
+ 
+     ret = ion_ioctl(fd, ION_IOC_ALLOC, &data);
+     if (ret < 0)
+         return ret;
++
+     *handle = data.handle;
+     return ret;
+ }
+@@ -131,7 +139,7 @@ int ion_share(int fd, ion_user_handle_t handle, int *share_fd)
+         .handle = handle,
+     };
+ 
+-    if (share_fd == NULL)
++    if (share_fd == NULL || !ion_is_legacy(fd))
+         return -EINVAL;
+ 
+     ret = ion_ioctl(fd, ION_IOC_SHARE, &data);
+@@ -150,11 +158,22 @@ int ion_alloc_fd(int fd, size_t len, size_t align, unsigned int heap_mask,
+     ion_user_handle_t handle;
+     int ret;
+ 
+-    ret = ion_alloc(fd, len, align, heap_mask, flags, &handle);
+-    if (ret < 0)
+-        return ret;
+-    ret = ion_share(fd, handle, handle_fd);
+-    ion_free(fd, handle);
++    if (!ion_is_legacy(fd)) {
++        struct ion_new_allocation_data data = {
++            .len = len,
++            .heap_id_mask = heap_mask,
++            .flags = flags,
++        };
++
++        ret = ion_ioctl(fd, ION_IOC_NEW_ALLOC, &data);
++        if (ret < 0) return ret;
++        *handle_fd = data.fd;
++    } else {
++        ret = ion_alloc(fd, len, align, heap_mask, flags, &handle);
++        if (ret < 0) return ret;
++        ret = ion_share(fd, handle, handle_fd);
++        ion_free(fd, handle);
++    }
+     return ret;
+ }
+ 
+@@ -165,7 +184,7 @@ int ion_import(int fd, int share_fd, ion_user_handle_t *handle)
+         .fd = share_fd,
+     };
+ 
+-    if (handle == NULL)
++    if (handle == NULL || !ion_is_legacy(fd))
+         return -EINVAL;
+ 
+     ret = ion_ioctl(fd, ION_IOC_IMPORT, &data);
+@@ -180,5 +199,159 @@ int ion_sync_fd(int fd, int handle_fd)
+     struct ion_fd_data data = {
+         .fd = handle_fd,
+     };
++
++    if (!ion_is_legacy(fd))
++        return -EINVAL;
++
+     return ion_ioctl(fd, ION_IOC_SYNC, &data);
+ }
++
++int ion_query_heap_cnt(int fd, int* cnt) {
++    int ret;
++    struct ion_heap_query query;
++
++    memset(&query, 0, sizeof(query));
++
++    ret = ion_ioctl(fd, ION_IOC_HEAP_QUERY, &query);
++    if (ret < 0) return ret;
++
++    *cnt = query.cnt;
++    return ret;
++}
++
++int ion_query_get_heaps(int fd, int cnt, void* buffers) {
++    int ret;
++    struct ion_heap_query query = {
++        .cnt = cnt, .heaps = (uintptr_t)buffers,
++    };
++
++    ret = ion_ioctl(fd, ION_IOC_HEAP_QUERY, &query);
++    return ret;
++}
++
++void *ion_mmap(int fd, void *addr, size_t length, int prot, int flags,
++	       int share_fd, off_t offset)
++{
++	void *mapping_address = NULL;
++
++	mapping_address =  mmap(addr, length, prot, flags, share_fd, offset);
++	if (mapping_address == MAP_FAILED) {
++		ALOGE("ion_mmap failed fd = %d, addr = 0x%p, len = %zu, prot = %d, flags = %d, share_fd = %d, 0x%p: %s\n", fd, addr, length,
++		      prot, flags, share_fd, mapping_address, strerror(errno));
++	}
++
++	return mapping_address;
++}
++
++int ion_munmap(int fd, void *addr, size_t length)
++{
++	int ret = munmap(addr, length);
++
++	if (ret < 0)
++		ALOGE("ion_munmap failed fd = %d, addr = 0x%p, len = %zu, %d: %s\n",
++		      fd, addr, length, ret, strerror(errno));
++
++	return ret;
++}
++
++int ion_alloc_mm(int fd, size_t len, size_t align,
++		 unsigned int flags, ion_user_handle_t *handle)
++{
++	if (handle)
++		*handle = NULL;
++	ALOGE("[fake_ops] %s\n", __func__);
++	return -EINVAL;
++}
++
++int ion_alloc_camera(int fd, size_t len, size_t align,
++		     unsigned int flags, ion_user_handle_t *handle)
++{
++	if (handle)
++		*handle = NULL;
++	ALOGE("[fake_ops] %s\n", __func__);
++	return -EINVAL;
++}
++
++int ion_alloc_syscontig(int fd, size_t len, size_t align,
++			unsigned int flags, ion_user_handle_t *handle)
++{
++	if (handle)
++		*handle = NULL;
++	ALOGE("[fake_ops] %s\n", __func__);
++	return -EINVAL;
++}
++
++int ion_alloc_camera_pool(int fd, size_t len, size_t align, unsigned int flags,
++			  unsigned int *ret, int cache_pool_cmd)
++{
++	if (ret)
++		*ret = NULL;
++	ALOGE("[fake_ops] %s\n", __func__);
++	return -EINVAL;
++}
++
++int ion_share_close(int fd, int share_fd)
++{
++	ALOGE("[fake_ops] %s >> use close(share_fd)\n", __func__);
++	return -EINVAL;
++}
++
++int mt_ion_open(const char *name)
++{
++	ALOGE("[fake_ops] %s >> use ion_open()\n", __func__);
++	return -EINVAL;
++}
++
++int mt_ion_close(int fd)
++{
++	ALOGE("[fake_ops] %s >> use ion_close(ion_fd)\n", __func__);
++	return -EINVAL;
++}
++
++int ion_set_client_name(int ion_fd, const char *name)
++{
++	ALOGE("[fake_ops] %s\n", __func__);
++	return -EINVAL;
++}
++
++int ion_cache_sync_flush_all(int fd)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
++
++int ion_cache_sync_flush_range(int fd)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
++
++int ion_cache_sync_flush_range_va(int fd, void *addr, size_t length)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
++
++int ion_dma_map_area(int fd, ion_user_handle_t handle, int dir)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
++
++int ion_dma_unmap_area(int fd, ion_user_handle_t handle, int dir)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
++
++int ion_dma_map_area_va(int fd, void *addr, size_t length, int dir)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
++
++int ion_dma_unmap_area_va(int fd, void *addr, size_t length, int dir)
++{
++	ALOGE("[fake_ops] %s >> use dma_buf cache sync ioctl\n", __func__);
++	return -EINVAL;
++}
+diff --git a/libion/kernel-headers/linux/ion_4.12.h b/libion/kernel-headers/linux/ion_4.12.h
+new file mode 100644
+index 0000000000..6ae79d4e85
+--- /dev/null
++++ b/libion/kernel-headers/linux/ion_4.12.h
+@@ -0,0 +1,125 @@
++/*
++ * Adapted from drivers/staging/android/uapi/ion.h
++ *
++ * Copyright (C) 2011 Google, Inc.
++ *
++ * This software is licensed under the terms of the GNU General Public
++ * License version 2, as published by the Free Software Foundation, and
++ * may be copied, distributed, and modified under those terms.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#ifndef _UAPI_LINUX_ION_NEW_H
++#define _UAPI_LINUX_ION_NEW_H
++
++#include <linux/ioctl.h>
++#include <linux/types.h>
++
++#define ION_NUM_HEAP_IDS (sizeof(unsigned int) * 8)
++
++/**
++ * DOC: Ion Userspace API
++ *
++ * create a client by opening /dev/ion
++ * most operations handled via following ioctls
++ *
++ */
++
++/**
++ * struct ion_new_allocation_data - metadata passed from userspace for allocations
++ * @len:		size of the allocation
++ * @heap_id_mask:	mask of heap ids to allocate from
++ * @flags:		flags passed to heap
++ * @handle:		pointer that will be populated with a cookie to use to
++ *			refer to this allocation
++ *
++ * Provided by userspace as an argument to the ioctl - added _new to denote
++ * this belongs to the new ION interface.
++ */
++struct ion_new_allocation_data {
++    __u64 len;
++    __u32 heap_id_mask;
++    __u32 flags;
++    __u32 fd;
++    __u32 unused;
++};
++
++#define MAX_HEAP_NAME 32
++
++/**
++ * struct ion_heap_data - data about a heap
++ * @name - first 32 characters of the heap name
++ * @type - heap type
++ * @heap_id - heap id for the heap
++ */
++struct ion_heap_data {
++    char name[MAX_HEAP_NAME];
++    __u32 type;
++    __u32 heap_id;
++    __u32 reserved0;
++    __u32 reserved1;
++    __u32 reserved2;
++};
++
++/**
++ * struct ion_heap_query - collection of data about all heaps
++ * @cnt - total number of heaps to be copied
++ * @heaps - buffer to copy heap data
++ */
++struct ion_heap_query {
++    __u32 cnt;       /* Total number of heaps to be copied */
++    __u32 reserved0; /* align to 64bits */
++    __u64 heaps;     /* buffer to be populated */
++    __u32 reserved1;
++    __u32 reserved2;
++};
++
++#define ION_IOC_MAGIC 'I'
++
++/**
++ * DOC: ION_IOC_NEW_ALLOC - allocate memory
++ *
++ * Takes an ion_allocation_data struct and returns it with the handle field
++ * populated with the opaque handle for the allocation.
++ * TODO: This IOCTL will clash by design; however, only one of
++ *  ION_IOC_ALLOC or ION_IOC_NEW_ALLOC paths will be exercised,
++ *  so this should not conflict.
++ */
++#define ION_IOC_NEW_ALLOC _IOWR(ION_IOC_MAGIC, 0, struct ion_new_allocation_data)
++
++/**
++ * DOC: ION_IOC_FREE - free memory
++ *
++ * Takes an ion_handle_data struct and frees the handle.
++ *
++ * #define ION_IOC_FREE		_IOWR(ION_IOC_MAGIC, 1, struct ion_handle_data)
++ * This will come from the older kernels, so don't redefine here
++ */
++
++/**
++ * DOC: ION_IOC_SHARE - creates a file descriptor to use to share an allocation
++ *
++ * Takes an ion_fd_data struct with the handle field populated with a valid
++ * opaque handle.  Returns the struct with the fd field set to a file
++ * descriptor open in the current address space.  This file descriptor
++ * can then be passed to another process.  The corresponding opaque handle can
++ * be retrieved via ION_IOC_IMPORT.
++ *
++ * #define ION_IOC_SHARE		_IOWR(ION_IOC_MAGIC, 4, struct ion_fd_data)
++ * This will come from the older kernels, so don't redefine here
++ */
++
++/**
++ * DOC: ION_IOC_HEAP_QUERY - information about available heaps
++ *
++ * Takes an ion_heap_query structure and populates information about
++ * available Ion heaps.
++ */
++#define ION_IOC_HEAP_QUERY _IOWR(ION_IOC_MAGIC, 8, struct ion_heap_query)
++
++#endif /* _UAPI_LINUX_ION_NEW_H */
+diff --git a/libion/kernel-headers/linux/ion_mtk.h b/libion/kernel-headers/linux/ion_mtk.h
+index 2c9487d5ac..471b7b1bb9 100644
+--- a/libion/kernel-headers/linux/ion_mtk.h
++++ b/libion/kernel-headers/linux/ion_mtk.h
+@@ -18,6 +18,24 @@
+ #define _MTK_MM_ION_H
+ 
+ #include <linux/ion.h>
++#include <linux/ion_4.12.h>
++#include <ion/ion.h>
++#include <sys/ioctl.h>
++
++/** for Modern ION (AOSP ION) **/
++
++/* MTK_AOSP_LIBION is only defined for the project with AOSP ION */
++#define MTK_AOSP_LIBION		1
++
++/* for normal buffer */
++#define ION_SYSTEM_HEAP_NAME	"ion_system_heap"
++#define MTK_ION_MM_HEAP_NAME	"mtk_ion_mm_heap"
++
++/* for security buffer */
++#define MTK_ION_SVP_HEAP_NAME	"ion_svp_heap"
++
++
++/** for Legacy ION (MTK ION) **/
+ 
+ enum mtk_ion_heap_type {
+ 	ION_HEAP_TYPE_MULTIMEDIA = 10,
+@@ -244,6 +262,13 @@ typedef struct ion_mm_data {
+ } ion_mm_data_t;
+ 
+ /* MediaTek implementment specially. */
++
++/* common APIs */
++void *ion_mmap(int fd, void *addr, size_t length, int prot, int flags,
++	       int share_fd, off_t offset);
++int ion_munmap(int fd, void *addr, size_t length);
++
++/* only for legacy ION */
+ static inline int ion_mtk_custom_ioctl(int fd, unsigned int cmd, void* arg)
+ {
+ 	struct ion_custom_data custom_data;
+@@ -257,6 +282,32 @@ static inline int ion_mtk_custom_ioctl(int fd, unsigned int cmd, void* arg)
+ 	return ret;
+ }
+ 
+-#define ion_custom_ioctl ion_mtk_custom_ioctl
++static inline int ion_custom_ioctl(int fd, unsigned int cmd, void* arg)
++{
++	return ion_mtk_custom_ioctl(fd, cmd, arg);
++}
++
++int ion_alloc_mm(int fd, size_t len, size_t align,
++		 unsigned int flags, ion_user_handle_t *handle);
++int ion_alloc_camera(int fd, size_t len, size_t align,
++                     unsigned int flags, ion_user_handle_t *handle);
++int ion_alloc_syscontig(int fd, size_t len, size_t align,
++                        unsigned int flags, ion_user_handle_t *handle);
++int ion_alloc_camera_pool(int fd, size_t len, size_t align, unsigned int flags,
++              unsigned int *ret, int cache_pool_cmd);
++int ion_share_close(int fd, int share_fd);
++
++int mt_ion_open(const char *name);
++int mt_ion_close(int fd);
++
++int ion_set_client_name(int ion_fd, const char *name);
++
++int ion_cache_sync_flush_all(int fd);
++int ion_cache_sync_flush_range(int fd);
++int ion_cache_sync_flush_range_va(int fd, void *addr, size_t length);
++int ion_dma_map_area(int fd, ion_user_handle_t handle, int dir);
++int ion_dma_unmap_area(int fd, ion_user_handle_t handle, int dir);
++int ion_dma_map_area_va(int fd, void *addr, size_t length, int dir);
++int ion_dma_unmap_area_va(int fd, void *addr, size_t length, int dir);
+ 
+ #endif
+-- 
+2.18.0
+
