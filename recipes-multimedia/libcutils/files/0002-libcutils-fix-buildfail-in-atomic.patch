@@ -1,0 +1,25 @@
+From 69858e23d417495b7dd0df6107cae6fe96109fa0 Mon Sep 17 00:00:00 2001
+From: Ginny Chen <ginny.chen@mediatek.com>
+Date: Wed, 24 Apr 2019 16:20:13 +0800
+Subject: [PATCH 2/2] libcutils:fix-buildfail-in-atomic
+
+Signed-off-by: Ginny Chen <ginny.chen@mediatek.com>
+---
+ libcutils/include/cutils/atomic.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/libcutils/include/cutils/atomic.h b/libcutils/include/cutils/atomic.h
+index 74fb07439..52a5c5bc9 100644
+--- a/libcutils/include/cutils/atomic.h
++++ b/libcutils/include/cutils/atomic.h
+@@ -19,6 +19,7 @@
+ 
+ #include <stdint.h>
+ #include <sys/types.h>
++#include <atomic>
+ ///M#include <stdatomic.h>
+ using std::memory_order_release;///M
+ using std::memory_order_acquire;///M
+-- 
+2.45.2
+
