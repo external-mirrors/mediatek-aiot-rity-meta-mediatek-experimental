@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2026 MediaTek Inc.
+ *
+ * Camera GPIO standardization
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include "camera-common.dtsi"
+
+/ {
+	fragment@25 {
+		target-path = "/soc";
+		__overlay__ {
+			kd_camera_hw1:kd-camera-hw1@1a003000 {
+				compatible = "mediatek,imgsensor";
+				reg = <0 0x1a003000 0 0x1000>;
+				pinctrl-names = "default",
+					"cam0_pnd0", "cam0_pnd1",
+					"cam1_pnd0", "cam1_pnd1",
+					"cam0_mclk_off",
+					"cam0_mclk_2mA", "cam0_mclk_4mA",
+					"cam0_mclk_6mA", "cam0_mclk_8mA",
+					"cam1_mclk_off",
+					"cam1_mclk_2mA", "cam1_mclk_4mA",
+					"cam1_mclk_6mA", "cam1_mclk_8mA";
+				pinctrl-0 = <&camera_pins_default>;
+				pinctrl-1 = <&cam_port0_pnd_0>;
+				pinctrl-2 = <&cam_port0_pnd_1>;
+				pinctrl-3 = <&cam_port1_pnd_0>;
+				pinctrl-4 = <&cam_port1_pnd_1>;
+
+				pinctrl-5 = <&cam_port0_mclk_off>;
+				pinctrl-6 = <&cam_port0_mclk_2ma>;
+				pinctrl-7 = <&cam_port0_mclk_4ma>;
+				pinctrl-8 = <&cam_port0_mclk_6ma>;
+				pinctrl-9 = <&cam_port0_mclk_8ma>;
+
+				pinctrl-10 = <&cam_port1_mclk_off>;
+				pinctrl-11 = <&cam_port1_mclk_2ma>;
+				pinctrl-12 = <&cam_port1_mclk_4ma>;
+				pinctrl-13 = <&cam_port1_mclk_6ma>;
+				pinctrl-14 = <&cam_port1_mclk_8ma>;
+
+				cam0-pin-mclk = "mclk";
+				cam0-pin-pdn = "gpio";
+				cam0-pin-vcama = "regulator";
+				cam0-vcama-supply = <&mt6359_vcamio_ldo_reg>;
+
+				cam1-pin-mclk = "mclk";
+				cam1-pin-pdn = "gpio";
+				cam1-pin-vcama = "regulator";
+				cam1-vcama-supply = <&mt6359_vcamio_ldo_reg>;
+
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@26 {
+		target = <&i2c7>;
+		__overlay__ {
+			status = "okay";
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2c7_pins>;
+			clock-frequency = <400000>;
+			camera_main_mtk:camera-main@1a {
+				compatible = "mediatek,camera_main";
+				#thermal-sensor-cells = <0>;
+				reg = <0x1a>;
+				status = "okay";
+				mclk-index  = <0>;   /* CMMCLK0 */
+				csi-port    = <0>;
+			};
+		};
+	};
+
+	fragment@27 {
+		target = <&i2c8>;
+		__overlay__ {
+			status = "okay";
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2c8_pins>;
+			clock-frequency = <400000>;
+
+			camera_sub_mtk:camera-sub@2a {
+				compatible = "mediatek,camera_sub";
+				#thermal-sensor-cells = <0>;
+				reg = <0x2a>;
+				status = "okay";
+				mclk-index  = <1>;   /* CMMCLK1 */
+				csi-port    = <1>;
+			};
+		};
+	};
+};
+
+/* CAMERA EEPROM end */

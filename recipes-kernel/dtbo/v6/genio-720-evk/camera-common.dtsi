@@ -1,0 +1,444 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2026 MediaTek Inc.
+ *
+ * Camera GPIO standardization
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/mt8189-pinfunc.h>
+#include "isp6s.dtsi"
+
+/ {
+	fragment@20 {
+		target = <&pio>;
+		__overlay__ {
+			camera_pins_default: camdefault {
+			};
+
+			i2c7_pins: i2c7 {
+				pins-bus {
+					pinmux = <PINMUX_GPIO66__FUNC_SDA7>,
+						<PINMUX_GPIO65__FUNC_SCL7>;
+					drive-strength = <MTK_DRIVE_4mA>;
+					bias-pull-up = <MTK_PULL_SET_RSEL_011>;
+					input-enable;
+				};
+			};
+
+			i2c8_pins: i2c8 {
+				pins-bus {
+					pinmux = <PINMUX_GPIO68__FUNC_SDA8>,
+						<PINMUX_GPIO67__FUNC_SCL8>;
+					drive-strength = <MTK_DRIVE_4mA>;
+					bias-pull-up = <MTK_PULL_SET_RSEL_011>;
+					input-enable;
+				};
+			};
+
+			cam_port0_pnd_0: camera-port0-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-low;
+				};
+			};
+
+			cam_port0_pnd_1: camera-port0-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-high;
+				};
+			};
+
+			cam_port1_pnd_0: camera-port1-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO73__FUNC_GPIO73>;
+					output-low;
+				};
+			};
+
+			cam_port1_pnd_1: camera-port1-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO73__FUNC_GPIO73>;
+					output-high;
+				};
+			};
+
+			cam_port0_mclk_off: camera-port0-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_mclk_2ma: camera-port0-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port0_mclk_4ma: camera-port0-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_mclk_6ma: camera-port0-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port0_mclk_8ma: camera-port0-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			cam_port1_mclk_off: camera-port1-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_GPIO23>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port1_mclk_2ma: camera-port1-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port1_mclk_4ma: camera-port1-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port1_mclk_6ma: camera-port1-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port1_mclk_8ma: camera-port1-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			// For serdes sensor
+			cam_port0_serdes_a0_pnd_0: camera-port0-serdes-a0-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-low;
+				};
+			};
+
+			cam_port0_serdes_a0_pnd_1: camera-port0-serdes-a0-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-high;
+				};
+			};
+
+			cam_port0_serdes_a1_pnd_0: camera-port0-serdes-a1-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-low;
+				};
+			};
+
+			cam_port0_serdes_a1_pnd_1: camera-port0-serdes-a1-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-high;
+				};
+			};
+
+			cam_port0_serdes_a2_pnd_0: camera-port0-serdes-a2-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-low;
+				};
+			};
+
+			cam_port0_serdes_a2_pnd_1: camera-port0-serdes-a2-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-high;
+				};
+			};
+
+			cam_port0_serdes_a3_pnd_0: camera-port0-serdes-a3-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-low;
+				};
+			};
+
+			cam_port0_serdes_a3_pnd_1: camera-port0-serdes-a3-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+					output-high;
+				};
+			};
+
+			cam_port1_serdes_b0_pnd_0: camera-port1-serdes-b0-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO73__FUNC_GPIO73>;
+					output-low;
+				};
+			};
+
+			cam_port1_serdes_b0_pnd_1: camera-port1-serdes-b0-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO73__FUNC_GPIO73>;
+					output-high;
+				};
+			};
+
+			cam_port1_serdes_b1_pnd_0: camera-port1-serdes-b1-pnd-0 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO73__FUNC_GPIO73>;
+					output-low;
+				};
+			};
+
+			cam_port1_serdes_b1_pnd_1: camera-port1-serdes-b1-pnd-1 {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO73__FUNC_GPIO73>;
+					output-high;
+				};
+			};
+
+			cam_port0_serdes_a0_mclk_off: camera-port0-serdes-a0-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a0_mclk_2ma: camera-port0-serdes-a0-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port0_serdes_a0_mclk_4ma: camera-port0-serdes-a0-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a0_mclk_6ma: camera-port0-serdes-a0-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port0_serdes_a0_mclk_8ma: camera-port0-serdes-a0-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			cam_port0_serdes_a1_mclk_off: camera-port0-serdes-a1-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a1_mclk_2ma: camera-port0-serdes-a1-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port0_serdes_a1_mclk_4ma: camera-port0-serdes-a1-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a1_mclk_6ma: camera-port0-serdes-a1-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port0_serdes_a1_mclk_8ma: camera-port0-serdes-a1-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			cam_port0_serdes_a2_mclk_off: camera-port0-serdes-a2-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a2_mclk_2ma: camera-port0-serdes-a2-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port0_serdes_a2_mclk_4ma: camera-port0-serdes-a2-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a2_mclk_6ma: camera-port0-serdes-a2-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port0_serdes_a2_mclk_8ma: camera-port0-serdes-a2-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			cam_port0_serdes_a3_mclk_off: camera-port0-serdes-a3-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_GPIO22>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a3_mclk_2ma: camera-port0-serdes-a3-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port0_serdes_a3_mclk_4ma: camera-port0-serdes-a3-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port0_serdes_a3_mclk_6ma: camera-port0-serdes-a3-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port0_serdes_a3_mclk_8ma: camera-port0-serdes-a3-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO22__FUNC_CMMCLK0>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			cam_port1_serdes_b0_mclk_off: camera-port1-serdes-b0-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_GPIO23>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port1_serdes_b0_mclk_2ma: camera-port1-serdes-b0-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port1_serdes_b0_mclk_4ma: camera-port1-serdes-b0-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port1_serdes_b0_mclk_6ma: camera-port1-serdes-b0-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port1_serdes_b0_mclk_8ma: camera-port1-serdes-b0-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+
+			cam_port1_serdes_b1_mclk_off: camera-port1-serdes-b1-mclk-off {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_GPIO23>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port1_serdes_b1_mclk_2ma: camera-port1-serdes-b1-mclk-2ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_2mA>;
+				};
+			};
+
+			cam_port1_serdes_b1_mclk_4ma: camera-port1-serdes-b1-mclk-4ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_4mA>;
+				};
+			};
+
+			cam_port1_serdes_b1_mclk_6ma: camera-port1-serdes-b1-mclk-6ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_6mA>;
+				};
+			};
+
+			cam_port1_serdes_b1_mclk_8ma: camera-port1-serdes-b1-mclk-8ma {
+				pins-cmd-dat {
+					pinmux = <PINMUX_GPIO23__FUNC_CMMCLK1>;
+					drive-strength = <MTK_DRIVE_8mA>;
+				};
+			};
+		};
+	};
+
+	fragment@21 {
+		target-path = "/soc";
+		__overlay__ {
+			mtkcam {
+				compatible = "mediatek,v4l2-adaptor";
+
+				iommus = <&mm_iommu M4U_L2_P2_MDP_WROT0>;
+			};
+		};
+	};
+};

@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2026 MediaTek Inc.
+ *
+ * Camera GPIO standardization
+ */
+
+#include "camera-max96724a-csi0-max96724b-csi1.dts"
+
+/ {
+	fragment@30 {
+		target = <&i2c7>;
+		__overlay__ {
+			camera-main@1a {
+				status = "disabled";
+			};
+			camera-sub@1b {
+				status = "disabled";
+			};
+			camera-main2@1c {
+				status = "disabled";
+			};
+			camera-sub2@1d {
+				status = "disabled";
+			};
+		};
+	};
+};

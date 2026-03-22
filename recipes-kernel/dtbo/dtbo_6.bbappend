@@ -15,4 +15,13 @@ FILESEXTRAPATHS:prepend:mt8367 := "${THISDIR}/v6/mt8367:"
 
 SRC_URI:append:genio-720-evk = " \
 	file://isp6s.dtsi \
+	file://camera-common.dtsi \
+	file://camera-max96724a-csi0.dts \
+	file://camera-max96724b-csi1.dts \
+	file://camera-max96724a-csi0-max96724b-csi1.dts \
+	file://camera-max96724a-csi0-single-csi1.dts \
+	file://camera-single-csi0-max96724b-csi1.dts \
+	file://camera-single-csi0-single-csi1.dts \
+	file://camera-single-csi0.dts \
+	file://camera-single-csi1.dts \
 "
