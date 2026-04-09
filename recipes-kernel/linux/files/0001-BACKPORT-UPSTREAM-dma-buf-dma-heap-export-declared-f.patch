@@ -1,0 +1,65 @@
+From f789699acc667b6e6ad97d0086585b829550c1fd Mon Sep 17 00:00:00 2001
+From: "Andy.Hsieh" <andy.hsieh@mediatek.com>
+Date: Tue, 7 Apr 2026 14:05:05 +0800
+Subject: [PATCH] BACKPORT: UPSTREAM: dma-buf: dma-heap: export declared
+ functions
+
+Export the dma-buf heap functions to allow them to be used by the OP-TEE
+driver. The OP-TEE driver wants to register and manage specific secure
+DMA heaps with it.
+
+Reviewed-by: Sumit Garg <sumit.garg@oss.qualcomm.com>
+Reviewed-by: T.J. Mercier <tjmercier@google.com>
+Acked-by: Sumit Semwal <sumit.semwal@linaro.org>
+Signed-off-by: Jens Wiklander <jens.wiklander@linaro.org>
+
+(cherry picked from commit a6ccb03fb77341df0573c5b3f82f82b4da1b87f5)
+
+The mainline kernel uses string literal for symbol namespace while it's
+still using macro expansion in kernel v6.6. So, remove the quotation mark.
+
+Change-Id: Ie634b7d1da1afbcfba4c2b53a8b3e76efff2232a
+Signed-off-by: Andy.Hsieh <andy.hsieh@mediatek.com>
+---
+ drivers/dma-buf/dma-heap.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/dma-buf/dma-heap.c b/drivers/dma-buf/dma-heap.c
+index 75f1a4a01bde..7c625240721d 100644
+--- a/drivers/dma-buf/dma-heap.c
++++ b/drivers/dma-buf/dma-heap.c
+@@ -11,6 +11,7 @@
+ #include <linux/device.h>
+ #include <linux/dma-buf.h>
+ #include <linux/err.h>
++#include <linux/export.h>
+ #include <linux/xarray.h>
+ #include <linux/list.h>
+ #include <linux/slab.h>
+@@ -240,6 +241,7 @@ void *dma_heap_get_drvdata(struct dma_heap *heap)
+ {
+ 	return heap->priv;
+ }
++EXPORT_SYMBOL_NS_GPL(dma_heap_get_drvdata, DMA_BUF_HEAP);
+ 
+ /**
+  * dma_heap_get_dev() - get device struct for the heap
+@@ -265,6 +267,7 @@ const char *dma_heap_get_name(struct dma_heap *heap)
+ {
+ 	return heap->name;
+ }
++EXPORT_SYMBOL_NS_GPL(dma_heap_get_name, DMA_BUF_HEAP);
+ 
+ static void dma_heap_release(struct kref *ref)
+ {
+@@ -381,6 +384,7 @@ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
+ 	kfree(heap);
+ 	return err_ret;
+ }
++EXPORT_SYMBOL_NS_GPL(dma_heap_add, DMA_BUF_HEAP);
+ 
+ static char *dma_heap_devnode(const struct device *dev, umode_t *mode)
+ {
+-- 
+2.45.2
+

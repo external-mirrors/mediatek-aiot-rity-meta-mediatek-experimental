@@ -1,0 +1,45 @@
+From 13a8ef305e89dbaac29530d8337b9dc7586d399d Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Wed, 22 Apr 2026 15:59:40 +0800
+Subject: [PATCH 25/35] GENIO: media: platform: mtk-mdp3: force BT.709
+ xfer_func for SDR output
+
+HDMI-RX now automatically converts incoming HDR content to SDR.
+Force xfer_func to V4L2_XFER_FUNC_709 to ensure the V4L2 pipeline
+correctly identifies the color characteristics after conversion.
+
+Fixes: 5fdfc2df65c1 ("GENIO: media: platform: mtk-mdp3: extend colorspace and bit depth support")
+Change-Id: I9cad48a43c7988773062e813dfeee16d98b0d6f3
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mtk-mdp3-capture.c      | 14 +-------------
+ 1 file changed, 1 insertion(+), 13 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+index fd2e9e3149f0..fcc1b9675501 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+@@ -104,19 +104,7 @@ static void _mdp_cap_fill_v4l2_format(struct v4l2_pix_format_mplane *pix_mp,
+ 		break;
+ 	}
+ 
+-	switch (mdp->rx_cap_intf.rx_xfer_func) {
+-	case HDMIRX_INTF_XFER_SDR:
+-		pix_mp->xfer_func = V4L2_XFER_FUNC_SRGB;
+-		break;
+-	case HDMIRX_INTF_XFER_HDR:
+-	case HDMIRX_INTF_XFER_HDR10:
+-	case HDMIRX_INTF_XFER_HLG:
+-		pix_mp->xfer_func = V4L2_XFER_FUNC_SMPTE2084;
+-		break;
+-	default:
+-		pix_mp->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+-		break;
+-	}
++	pix_mp->xfer_func = V4L2_XFER_FUNC_709;
+ 
+ 	switch (mdp->rx_cap_intf.rx_quantization) {
+ 	case HDMIRX_INTF_QUANTIZED_RANGE_LIMITED:
+-- 
+2.45.2
+

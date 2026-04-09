@@ -1,0 +1,86 @@
+From ea01b7e97d7b495834d682c931d24660c8de4542 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Thu, 9 Apr 2026 08:24:03 +0800
+Subject: [PATCH 22/35] GENIO: media: platform: mtk-mdp3: avoid extra SCP
+ control when using kernel algorithm
+
+Bypass redundant SCP control sequences when the MDP3 kernel algorithm is
+active. This prevents driver probe failures on platforms like G720,
+where SCP firmware does not exist.
+
+Fixes: 28d533198fe5 ("GENIO: media: platform: mtk-mdp3: enable MT8195 kernel algorithm for M2M device")
+CR-Id: AUTO00847791
+Change-Id: Ibdcbe752a0b0cad954c4e597f2f2bf635dfd2026
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../media/platform/mediatek/mdp3/mtk-mdp3-capture.c    |  4 ++++
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c   | 10 ++++++++--
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+index c3867b247437..71d4e7888432 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+@@ -445,6 +445,9 @@ static int mdp_cap_start_streaming(struct vb2_queue *q, unsigned int count)
+ 		}
+ 	}
+ 
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat)
++		goto worker_end;
++
+ 	if (!mdp_cap_ctx_is_state_set(ctx, MDP_VPU_INIT)) {
+ 		ret = mdp_vpu_get_locked(ctx->mdp_dev);
+ 		if (ret) {
+@@ -455,6 +458,7 @@ static int mdp_cap_start_streaming(struct vb2_queue *q, unsigned int count)
+ 		mdp_cap_ctx_set_state(ctx, MDP_VPU_INIT);
+ 	}
+ 
++worker_end:
+ 	atomic_set(&ctx->mdp_dev->cap_discard, 0);
+ 	atomic_set(&ctx->mdp_dev->cap_oneshot, 1);
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+index fc550693ee08..4bb2b9fd4df9 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+@@ -160,7 +160,8 @@ void mdp_video_device_release(struct video_device *vdev)
+ 
+ 	mdp_vpu_shared_mem_free(&mdp->vpu);
+ 
+-	scp_put(mdp->scp);
++	if (!mdp->mdp_data->mdp_alg_plat)
++		scp_put(mdp->scp);
+ 
+ 	destroy_workqueue(mdp->job_wq);
+ 	destroy_workqueue(mdp->clock_wq);
+@@ -298,6 +299,9 @@ static int mdp_probe(struct platform_device *pdev)
+ 		goto err_destroy_job_wq;
+ 	}
+ 
++	if (mdp->mdp_data->mdp_alg_plat)
++		goto scp_comm_unused;
++
+ 	mdp->scp = scp_get(pdev);
+ 	if (!mdp->scp) {
+ 		mm_pdev = __get_pdev_by_id(pdev, NULL, MDP_INFRA_SCP);
+@@ -312,6 +316,7 @@ static int mdp_probe(struct platform_device *pdev)
+ 	mdp->rproc_handle = scp_get_rproc(mdp->scp);
+ 	dev_dbg(&pdev->dev, "MDP rproc_handle: %pK", mdp->rproc_handle);
+ 
++scp_comm_unused:
+ 	mutex_init(&mdp->vpu_lock);
+ 	mutex_init(&mdp->m2m_lock);
+ 	mutex_init(&mdp->cap_lock);
+@@ -356,7 +361,8 @@ static int mdp_probe(struct platform_device *pdev)
+ err_mbox_destroy:
+ 	while (--i >= 0)
+ 		cmdq_mbox_destroy(mdp->cmdq_clt[i]);
+-	scp_put(mdp->scp);
++	if (!mdp->mdp_data->mdp_alg_plat)
++		scp_put(mdp->scp);
+ err_destroy_clock_wq:
+ 	destroy_workqueue(mdp->clock_wq);
+ err_destroy_job_wq:
+-- 
+2.45.2
+

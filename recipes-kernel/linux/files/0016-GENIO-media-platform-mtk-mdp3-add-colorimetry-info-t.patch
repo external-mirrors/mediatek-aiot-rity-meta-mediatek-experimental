@@ -1,0 +1,69 @@
+From df978e3f5b5a55d97e4c0476cb84e1ae27fac442 Mon Sep 17 00:00:00 2001
+From: Macross Chen <macross.chen@mediatek.com>
+Date: Wed, 18 Mar 2026 14:03:32 +0800
+Subject: [PATCH 16/35] GENIO: media: platform: mtk-mdp3: add colorimetry info
+ to mdp-capture
+
+- add parameter for deep color and colorimetry.
+- add empty notification callback for colorimetry change.
+
+Change-Id: Idd81001085e794af6318a15c18f8c1cf5eb1f036
+Signed-off-by: Macross Chen <macross.chen@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mtk-mdp3-capture.c    | 16 ++++++++++++++++
+ .../media/platform/mediatek/mdp3/mtk-mdp3-core.h |  2 ++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+index 410d2779ce7c..4df426771848 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+@@ -869,6 +869,8 @@ static int mdp_cap_probe(struct hdmirx_capture_interface *intf)
+ 	mdp->rx_cap_intf.rx_height = intf->height;
+ 	mdp->rx_cap_intf.rx_frame_rate = intf->frame_rate;
+ 	mdp->rx_cap_intf.rx_color_space = intf->color_space;
++	mdp->rx_cap_intf.rx_deep_color = intf->deep_color;
++	mdp->rx_cap_intf.rx_colorimetry = intf->colorimetry;
+ 
+ 	ret = mdp_capture_device_register(mdp);
+ 	if (ret)
+@@ -892,9 +894,23 @@ static void mdp_cap_disconnect(struct hdmirx_capture_interface *intf)
+ 	mdp_capture_device_unregister(mdp);
+ }
+ 
++static int mdp_cap_notify(struct hdmirx_capture_interface *intf, enum hdmirx_intf_notify,
++			  void *data)
++{
++	struct mdp_dev *mdp = (struct mdp_dev *)intf->priv;
++
++	mdp->rx_cap_intf.rx_colorimetry = *(enum hdmirx_intf_colorimetry *)data;
++
++	/* handle colorimetry change, e.g. enable HDR matrix */
++
++	return 0;
++}
++
++
+ static const struct hdmirx_capture_ops mdp_cap_driver_ops = {
+ 	.probe		= mdp_cap_probe,
+ 	.disconnect	= mdp_cap_disconnect,
++	.notify		= mdp_cap_notify,
+ };
+ 
+ struct mdp_cap_driver mdp_cap_driver = {
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.h
+index 2d86a0a8fdad..3a4c89bd52cb 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.h
+@@ -110,6 +110,8 @@ struct mdp_rx_cap_intf {
+ 	unsigned int rx_height;
+ 	unsigned int rx_frame_rate;
+ 	enum hdmirx_intf_cs rx_color_space;
++	enum hdmirx_intf_dp rx_deep_color;
++	enum hdmirx_intf_colorimetry rx_colorimetry;
+ };
+ 
+ struct mdp_dev {
+-- 
+2.45.2
+

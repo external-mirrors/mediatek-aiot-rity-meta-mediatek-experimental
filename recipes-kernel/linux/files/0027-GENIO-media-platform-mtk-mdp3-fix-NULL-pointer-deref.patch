@@ -1,0 +1,119 @@
+From a88da22351445f45a619f091ea7b27a1576aeb13 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Fri, 8 May 2026 08:44:03 +0800
+Subject: [PATCH 27/35] GENIO: media: platform: mtk-mdp3: fix NULL pointer
+ dereferences
+
+Add NULL pointer checks before dereferencing pointers to prevent
+potential crashes.
+
+Coverity issue:
+Event cert_exp34_c_violation: Dereferencing pointer, which is
+known to be "NULL".
+
+Fixed in:
+- mdp_alg_aal.c: aal_tile_prepare()
+- mdp_alg_hdr.c: hdr_tile_prepare()
+- mdp_alg_split.c: split_tile_prepare()
+- mdp_alg_tdshp.c: tdshp_tile_prepare()
+- mdp_alg_core.c: mdp_alg_process()
+- mtk-mdp3-core.c: mdp_probe()
+
+Change-Id: Ife2172b08413bf47ebecd6089c7c5b31b7288ef2
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c   | 3 +++
+ drivers/media/platform/mediatek/mdp3/mdp_alg_core.c  | 2 ++
+ drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c   | 3 +++
+ drivers/media/platform/mediatek/mdp3/mdp_alg_split.c | 3 +++
+ drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c | 3 +++
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c | 4 ++++
+ 6 files changed, 18 insertions(+)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c
+index 192de5582841..31350e5abfa1 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c
+@@ -140,6 +140,9 @@ static int aal_tile_prepare(struct mdp_alg_task *task,
+ 	struct mdp_alg_frame_config *cfg = &task->cfg;
+ 	const struct aal_data *aal = get_private_data(task, path, n);
+ 
++	if (!aal)
++		return -EINVAL;
++
+ 	func->for_func = tile_aal_for;
+ 	func->enable_flag = true;
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+index adb669ca0f9c..23fc93dd8d8d 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+@@ -624,6 +624,8 @@ int mdp_alg_process(void *ctx, struct img_ipi_frameparam *param)
+ 	}
+ 
+ 	task = kzalloc(sizeof(*task), GFP_KERNEL);
++	if (!task)
++		return -ENOMEM;
+ 	task->cfg.param = param;
+ 	task->cfg.frame_in.width = param->inputs[0].buffer.format.width;
+ 	task->cfg.frame_in.height = param->inputs[0].buffer.format.height;
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+index 83182b51d0e8..7255c6e4821c 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+@@ -290,6 +290,9 @@ static int hdr_tile_prepare(struct mdp_alg_task *task,
+ 	struct mdp_alg_frame_config *cfg = &task->cfg;
+ 	const struct hdr_data *hdr = get_private_data(task, path, n);
+ 
++	if (!hdr)
++		return -EINVAL;
++
+ 	func->for_func = tile_crop_for;
+ 	func->enable_flag = !hdr_frm->relay;
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c
+index 19a2cbc3a22f..919fd533fdae 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c
+@@ -279,6 +279,9 @@ static int split_tile_prepare(struct mdp_alg_task *task,
+ 	struct img_image_buffer *src_buf = &param->inputs[0].buffer;
+ 	u32 src_fmt = src_buf->format.colorformat;
+ 
++	if (!split)
++		return -EINVAL;
++
+ 	data->split.src_fmt = src_fmt;
+ 	data->split.crop_offset_x = cfg->frame_in_crop[0].left;
+ 	data->split.crop_offset_y = cfg->frame_in_crop[0].top;
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c
+index 11192e21b2c7..963d80a91108 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c
+@@ -177,6 +177,9 @@ static int tdshp_tile_prepare(struct mdp_alg_task *task,
+ 	const struct img_frame *frame_out = &cfg->frame_out[node->out_idx];
+ 	const u8 rotate = cfg->out_rotate[node->out_idx];
+ 
++	if (!tdshp)
++		return -EINVAL;
++
+ 	data->tdshp.relay_mode = tdshp->relay_mode;
+ 	data->tdshp.max_width = tdshp->tile_width;
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+index 8bd3dc5efc1c..e6c27f58d674 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+@@ -250,6 +250,10 @@ static int mdp_probe(struct platform_device *pdev)
+ 	mdp->mdp_data = of_device_get_match_data(&pdev->dev);
+ 
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res) {
++		ret = -EINVAL;
++		goto err_return;
++	}
+ 	if (res->start != mdp->mdp_data->mdp_con_res) {
+ 		platform_set_drvdata(pdev, mdp);
+ 		goto success_return;
+-- 
+2.45.2
+

@@ -1,0 +1,739 @@
+From 51f66dc0dfb734a18e466c2c65ae34ef45451a6a Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Thu, 26 Mar 2026 07:54:11 +0800
+Subject: [PATCH 21/35] GENIO: media: platform: mtk-mdp3: add kernel algorithm 
+ for MT8195 HDMI-RX
+
+Convert the mt8195 MDP3 HDMI-RX functionality to use kernel-side algorithms
+to eliminate the dependency on SCP.
+Add the config related to the HDMI-RX flow and RGB-to-YUV conversion.
+
+Change-Id: I9c9de70e1d5c445fff2ba9bb24394a5c2be4e594
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mdp_alg_core.c     | 246 +++++++++++++++---
+ .../platform/mediatek/mdp3/mdp_alg_hdr.c      |   7 +-
+ .../media/platform/mediatek/mdp3/mdp_alg_tp.c |  49 +++-
+ .../platform/mediatek/mdp3/mdp_alg_wrot.c     |  52 +++-
+ .../platform/mediatek/mdp3/mtk-mdp3-alg.h     |   4 +-
+ .../platform/mediatek/mdp3/mtk-mdp3-capture.c |  11 +
+ .../platform/mediatek/mdp3/mtk-mdp3-capture.h |   1 +
+ .../platform/mediatek/mdp3/mtk-mdp3-cmdq.h    |   1 -
+ .../platform/mediatek/mdp3/mtk-mdp3-m2m.c     |   2 +-
+ .../platform/mediatek/mdp3/mtk-mdp3-regs.h    |   2 +
+ 10 files changed, 318 insertions(+), 57 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+index 9a5aa80e781f..adb669ca0f9c 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+@@ -6,6 +6,7 @@
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+ #include "mtk-mdp3-alg.h"
++#include "mtk-mdp3-capture.h"
+ #include "mtk-mdp3-cmdq.h"
+ #include "mtk-mdp3-core.h"
+ #include "mtk-mdp3-m2m.h"
+@@ -37,19 +38,63 @@ struct mdp_alg_cmdq {
+ 	u8 pipe_idx;
+ };
+ 
++static bool need_resize(const struct mdp_alg_frame_config *cfg)
++{
++	u32 srcw = cfg->param->inputs[0].buffer.format.width;
++	u32 srch = cfg->param->inputs[0].buffer.format.height;
++	u32 outw = cfg->param->outputs[0].buffer.format.width;
++	u32 outh = cfg->param->outputs[0].buffer.format.height;
++	struct img_crop *crop = &cfg->param->outputs[0].crop;
++
++	if (crop->width == srcw &&
++	    srcw == outw &&
++	    crop->height == srch &&
++	    srch == outh &&
++	    crop->left_subpix == 0 &&
++	    crop->top_subpix == 0 &&
++	    crop->width_subpix == 0 &&
++	    crop->height_subpix == 0)
++		return false;
++
++	return true;
++}
++
++static bool check_alpha_rotate(struct mdp_alg_task *task)
++{
++	struct img_ipi_frameparam *p = task->cfg.param;
++	struct img_image_buffer *src_buf = &p->inputs[0].buffer;
++	struct img_image_buffer *dst_buf = &p->outputs[0].buffer;
++	u32 src_fmt = src_buf->format.colorformat;
++	u32 dst_fmt = dst_buf->format.colorformat;
++	bool alpha = false, rsz_enable;
++
++	if (MDP_COLOR_IS_ALPHA(src_fmt) && MDP_COLOR_IS_ALPHA(dst_fmt))
++		alpha = true;
++
++	rsz_enable = need_resize(&task->cfg);
++
++	return (alpha && rsz_enable);
++}
++
+ static struct mdp_alg_cmdq *prepare_cmdq(struct mdp_alg_task *task, u32 pipe)
+ {
+ 	struct mdp_alg_path_tp *path = &task->cfg.path[pipe];
+-	struct cmdq_client *clt = task->mdp->cmdq_clt[pipe];
++	struct cmdq_client *clt;
+ 	struct mdp_alg_cmdq *cmd;
+ 	struct mdp_comp *comps;
+-	struct mdp_m2m_ctx *ctx = (struct mdp_m2m_ctx *)task->ctx;
++	u32 clt_idx;
+ 	u32 node_cnt = path->node_cnt;
+ 	int ret, i;
+ 
+-	ret = mbox_flush(clt->chan, 0);
+-	if (ret)
+-		goto err_prepare_cmdq;
++	clt_idx = task->cfg.path[pipe].cmdq_clt_idx;
++	clt = task->mdp->cmdq_clt[clt_idx];
++
++	if (task->cmdq_id == MDP_CMDQ_USER_M2M ||
++	    atomic_read(&task->mdp->cap_oneshot)) {
++		ret = mbox_flush(clt->chan, 0);
++		if (ret)
++			goto err_prepare_cmdq;
++	}
+ 
+ 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
+ 	if (!cmd)
+@@ -69,12 +114,31 @@ static struct mdp_alg_cmdq *prepare_cmdq(struct mdp_alg_task *task, u32 pipe)
+ 
+ 	cmd->task = task;
+ 	cmd->comps = comps;
+-	cmd->ctx = ctx;
+-	cmd->user = MDP_CMDQ_USER_ALG;
++	cmd->ctx = task->ctx;
++	cmd->user = task->cmdq_id;
+ 	cmd->comp_num = node_cnt;
+ 	cmd->pipe_num = task->cfg.dual ? 2 : 1;
+ 	cmd->pipe_idx = pipe;
+ 
++	if (task->cmdq_id == MDP_CMDQ_USER_M2M)
++		goto prepare_done;
++
++	/*
++	 * The mutex/clk should only be enabled in 1st frame and released when
++	 * streaming is stopped. There is no need for any additional allocation
++	 * to comp in the process, which prevents memory leaks.
++	 */
++	if (atomic_read(&task->mdp->cap_oneshot)) {
++		struct mdp_cap_ctx *cap_ctx = task->ctx;
++
++		cap_ctx->num_comps[pipe] = node_cnt;
++		cap_ctx->comps[pipe] = comps;
++	} else {
++		kfree(comps);
++		cmd->comps = NULL;
++	}
++
++prepare_done:
+ 	return cmd;
+ 
+ err_prepare_comp:
+@@ -119,6 +183,21 @@ static int config_comp(struct mdp_alg_task *task, u32 pipe)
+ 	if (!res)
+ 		return -ENODEV;
+ 
++	/*
++	 * In HDMI-RX case, the entire CMDQ packet needs to wait until the
++	 * HDMI EOF (Vsync) is received before it can be executed at the
++	 * vertical front porch time point.
++	 */
++	if (path->nodes[0].id == MDP_COMP_SPLIT ||
++	    path->nodes[0].id == MDP_COMP_SPLIT2) {
++		s32 event = path->nodes[0].comp->gce_event[MDP_GCE_EVENT_SOF];
++
++		event += path->mutex_idx;
++		if (atomic_read(&task->mdp->cap_oneshot))
++			cmdq_pkt_set_event(pkt, event);
++		cmdq_pkt_wfe(pkt, event, true);
++	}
++
+ 	/* Disable MDPSYS shadow */
+ 	cmdq_pkt_write_value_addr(pkt, res->start + 0xf00, BIT(0), BIT(0));
+ 
+@@ -149,6 +228,12 @@ static int config_path_clk_ctrl(struct mdp_alg_task *task, u32 pipe, bool clear)
+ 	int ret, i;
+ 
+ 	mutex = task->mdp->mm_subsys[path->mmsys_idx].mdp_mutex[path->mutex_idx];
++	if (task->cmdq_id == MDP_CMDQ_USER_CAP) {
++		if (atomic_read(&task->mdp->cap_oneshot))
++			((struct mdp_cap_ctx *)task->ctx)->mutex[pipe] = mutex;
++		else
++			return 0;
++	}
+ 
+ 	if (clear)
+ 		mtk_mutex_unprepare(mutex);
+@@ -205,6 +290,35 @@ static int config_mutex_mod_ctrl(struct mdp_alg_task *task, u32 pipe, bool clear
+ 	return 0;
+ }
+ 
++static void config_mutex_sof_ctrl(struct mdp_alg_task *task, u32 pipe, bool clear)
++{
++	struct mdp_alg_path_tp *path = &task->cfg.path[pipe];
++	struct cmdq_pkt *pkt = task->pkts[pipe];
++	int i;
++
++	for (i = 0; i < path->node_cnt; i++) {
++		struct mdp_comp *comp = path->nodes[i].comp;
++		s32 event = comp->gce_event[MDP_GCE_EVENT_SOF];
++
++		if (comp->type == MDP_COMP_TYPE_DUMMY)
++			continue;
++
++		if (event == MDP_GCE_NO_EVENT)
++			continue;
++
++		if (clear)
++			cmdq_pkt_clear_event(pkt, event);
++
++		/* HDMI-RX stream_done event need wait at initial position */
++		if (comp->public_id == MDP_COMP_SPLIT ||
++		    comp->public_id == MDP_COMP_SPLIT2)
++			continue;
++
++		if (!clear)
++			cmdq_pkt_wfe(pkt, event, true);
++	}
++}
++
+ static int config_mmsys_mux_ctrl(struct mdp_alg_task *task, u32 pipe, bool clear)
+ {
+ 	struct mdp_alg_path_tp *path = &task->cfg.path[pipe];
+@@ -259,7 +373,11 @@ static int config_tile_run(struct mdp_alg_task *task, u32 pipe)
+ 		if (ret)
+ 			return ret;
+ 
+-		mtk_mutex_write_sof(m, MUTEX_SOF_IDX_SINGLE_MODE);
++		if (path->nodes[0].id == MDP_COMP_SPLIT ||
++		    path->nodes[0].id == MDP_COMP_SPLIT2)
++			mtk_mutex_write_sof(m, MUTEX_SOF_IDX_HDMI_VSYNC_MODE);
++		else
++			mtk_mutex_write_sof(m, MUTEX_SOF_IDX_SINGLE_MODE);
+ 
+ 		ret = config_mmsys_mux_ctrl(task, pipe, false);
+ 		if (ret)
+@@ -272,8 +390,12 @@ static int config_tile_run(struct mdp_alg_task *task, u32 pipe)
+ 				return ret;
+ 		}
+ 
++		config_mutex_sof_ctrl(task, pipe, true);
++
+ 		mtk_mutex_enable_by_cmdq(m, (void *)task->pkts[pipe]);
+ 
++		config_mutex_sof_ctrl(task, pipe, false);
++
+ 		for (i = 0; i < path->node_cnt; i++) {
+ 			comp = path->nodes[i].comp;
+ 			ret = call_alg_op(comp, cmdq_wait, task, path, i);
+@@ -297,6 +419,8 @@ static void cmdq_release_work(struct mdp_alg_cmdq *cmd)
+ 	struct device *dev;
+ 	int vb_state = VB2_BUF_STATE_DONE;
+ 	int i, c;
++	bool job_done = false;
++	bool timeout = false;
+ 
+ 	if (!cmd)
+ 		return;
+@@ -306,32 +430,45 @@ static void cmdq_release_work(struct mdp_alg_cmdq *cmd)
+ 	mdp = task->mdp;
+ 	dev = &task->mdp->pdev->dev;
+ 
+-	if (cmd->data->sta < 0)
++	if (cmd->data->sta < 0) {
+ 		vb_state = VB2_BUF_STATE_ERROR;
++		timeout = true;
++	}
++
++	c = atomic_read(&mdp->job_count[cmd->user]);
++	if (!((c - 1) % cmd->pipe_num))
++		job_done = true;
++	atomic_dec(&mdp->job_count[cmd->user]);
++	wake_up(&mdp->callback_wq);
++
++	if (job_done) {
++		if (cmd->user == MDP_CMDQ_USER_M2M)
++			mdp_m2m_process_done(cmd->ctx, vb_state);
++		else
++			mdp_cap_job_finish(cmd->ctx, timeout);
++	}
++
++	if (cmd->user == MDP_CMDQ_USER_CAP)
++		goto cmdq_send_done;
+ 
+ 	config_mutex_mod_ctrl(task, cmd->pipe_idx, true);
+ 	config_path_clk_ctrl(task, cmd->pipe_idx, true);
+-
+ 	kfree(cmd->comps);
+ 	cmd->comps = NULL;
+ 
+-	mdp_cmdq_pkt_destroy(&cmd->pkt);
+-	for (i = 0; i < path->node_cnt; i++) {
+-		kfree(path->nodes[i].data);
+-		path->nodes[i].data = NULL;
+-	}
+-
+-	kfree(task->cfg.tile[path->path_id]);
+-	task->cfg.tile[path->path_id] = NULL;
+-
+-	c = atomic_read(&mdp->job_count[MDP_CMDQ_USER_ALG]);
+-	if (!((c - 1) % cmd->pipe_num)) {
+-		mdp_m2m_process_done(cmd->ctx, vb_state);
++	if (job_done) {
++		kfree(task->cfg.tile[path->path_id]);
++		task->cfg.tile[path->path_id] = NULL;
+ 		kfree(task);
+ 		task = NULL;
+ 	}
+-	atomic_dec(&mdp->job_count[MDP_CMDQ_USER_ALG]);
+ 
++cmdq_send_done:
++	for (i = 0; i < path->node_cnt; i++) {
++		kfree(path->nodes[i].data);
++		path->nodes[i].data = NULL;
++	}
++	mdp_cmdq_pkt_destroy(&cmd->pkt);
+ 	kfree(cmd);
+ 	cmd = NULL;
+ }
+@@ -373,10 +510,14 @@ static void cmdq_callback(struct mbox_client *cl, void *mssg)
+ 
+ static int cmdq_send(struct mdp_alg_cmdq *cmd)
+ {
+-	struct cmdq_client *clt = cmd->task->mdp->cmdq_clt[cmd->pipe_idx];
++	struct cmdq_client *clt;
+ 	struct cmdq_pkt *pkt = &cmd->pkt;
++	u32 clt_idx;
+ 	int ret;
+ 
++	clt_idx = cmd->task->cfg.path[cmd->pipe_idx].cmdq_clt_idx;
++	clt = cmd->task->mdp->cmdq_clt[clt_idx];
++
+ 	cmdq_pkt_finalize(pkt);
+ 	clt->client.rx_callback = cmdq_callback;
+ 	dma_sync_single_for_device(clt->chan->mbox->dev,
+@@ -396,6 +537,7 @@ int mdp_alg_submit(struct mdp_alg_task *task)
+ {
+ 	struct mdp_dev *mdp = task->mdp;
+ 	struct device *dev = &mdp->pdev->dev;
++	struct mdp_alg_cmdq *cmd[MDP_ALG_MAX_PIPE];
+ 	int ret, i, pipe_used = 1;
+ 
+ 	ret = mdp_alg_tp_select_path(task);
+@@ -407,12 +549,14 @@ int mdp_alg_submit(struct mdp_alg_task *task)
+ 
+ 	if (atomic_read(&mdp->suspended))
+ 		return -EINVAL;
+-	atomic_set(&mdp->job_count[MDP_CMDQ_USER_ALG], pipe_used);
+ 
+-	for (i = 0; i < pipe_used; i++) {
+-		struct mdp_alg_cmdq *cmd;
++	if (task->cmdq_id == MDP_CMDQ_USER_CAP)
++		atomic_add(pipe_used, &mdp->job_count[task->cmdq_id]);
++	else
++		atomic_set(&mdp->job_count[task->cmdq_id], pipe_used);
+ 
+-		cmd = prepare_cmdq(task, i);
++	for (i = 0; i < pipe_used; i++) {
++		cmd[i] = prepare_cmdq(task, i);
+ 		if (!cmd)
+ 			return ret;
+ 
+@@ -435,8 +579,13 @@ int mdp_alg_submit(struct mdp_alg_task *task)
+ 		ret = config_tile_run(task, i);
+ 		if (ret)
+ 			return ret;
++	}
+ 
+-		ret = cmdq_send(cmd);
++	if (atomic_read(&mdp->cap_oneshot))
++		atomic_set(&mdp->cap_oneshot, 0);
++
++	for (i = 0; i < pipe_used; i++) {
++		ret = cmdq_send(cmd[i]);
+ 		if (ret) {
+ 			dev_err(dev, "pipe %d CMDQ send failed %d\n", i, ret);
+ 			return ret;
+@@ -446,26 +595,40 @@ int mdp_alg_submit(struct mdp_alg_task *task)
+ 	return 0;
+ }
+ 
+-int mdp_alg_process(struct mdp_m2m_ctx *ctx, struct img_ipi_frameparam *param)
++int mdp_alg_process(void *ctx, struct img_ipi_frameparam *param)
+ {
+ 	struct mdp_alg_task *task;
++	struct mdp_dev *mdp;
++	enum mdp_cmdq_user c_id;
+ 	int ret, i;
+ 
+-	if (atomic_read(&ctx->mdp_dev->job_count[MDP_CMDQ_USER_ALG])) {
+-		ret = wait_event_timeout(ctx->mdp_dev->callback_wq,
+-					 !atomic_read(&ctx->mdp_dev->job_count[MDP_CMDQ_USER_ALG]),
++	if (param->type == MDP_STREAM_TYPE_BITBLT ||
++	    param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
++		mdp = ((struct mdp_m2m_ctx *)ctx)->mdp_dev;
++		c_id = MDP_CMDQ_USER_M2M;
++	} else {
++		mdp = ((struct mdp_cap_ctx *)ctx)->mdp_dev;
++		c_id = MDP_CMDQ_USER_CAP;
++	}
++
++	if (atomic_read(&mdp->job_count[c_id]) && c_id != MDP_CMDQ_USER_CAP) {
++		ret = wait_event_timeout(mdp->callback_wq,
++					 !atomic_read(&mdp->job_count[c_id]),
+ 					 2 * HZ);
+ 		if (ret == 0) {
+-			dev_err(&ctx->mdp_dev->pdev->dev,
++			dev_err(&mdp->pdev->dev,
+ 				"%d M2M jobs not yet done\n",
+-				atomic_read(&ctx->mdp_dev->job_count[MDP_CMDQ_USER_ALG]));
++				atomic_read(&mdp->job_count[c_id]));
+ 			return -EBUSY;
+ 		}
+ 	}
+ 
+ 	task = kzalloc(sizeof(*task), GFP_KERNEL);
++	task->cfg.param = param;
+ 	task->cfg.frame_in.width = param->inputs[0].buffer.format.width;
+ 	task->cfg.frame_in.height = param->inputs[0].buffer.format.height;
++	task->cmdq_id = c_id;
++
+ 	for (i = 0; i < param->num_outputs; i++) {
+ 		memcpy(&task->cfg.frame_in_crop[i], &param->outputs[i].crop,
+ 		       sizeof(struct img_crop));
+@@ -505,11 +668,16 @@ int mdp_alg_process(struct mdp_m2m_ctx *ctx, struct img_ipi_frameparam *param)
+ 			task->cfg.frame_in_crop[i].height;
+ 	}
+ 
+-	task->cfg.param = param;
++	task->cfg.alpharot = check_alpha_rotate(task);
+ 	task->ctx = ctx;
+-	task->mdp = ctx->mdp_dev;
+-	for (i = 0; i < MDP_ALG_MAX_PIPE; i++)
+-		task->t_cache[i] = &ctx->tile_cache[i];
++	task->mdp = mdp;
++	for (i = 0; i < MDP_ALG_MAX_PIPE; i++) {
++		if (param->type == MDP_STREAM_TYPE_BITBLT ||
++		    param->type == MDP_STREAM_TYPE_DUAL_BITBLT)
++			task->t_cache[i] = &((struct mdp_m2m_ctx *)ctx)->tile_cache[i];
++		else
++			task->t_cache[i] = &((struct mdp_cap_ctx *)ctx)->tile_cache[i];
++	}
+ 
+ 	return mdp_alg_submit(task);
+ }
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+index 6962443bbfd6..387d36bf9cbe 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+@@ -144,11 +144,10 @@ static int hdr_config_frame(struct mdp_alg_task *task,
+ 				  hdr_frm->hdr_top, 0x3F0F0000);
+ 
+ 	/* Relay mode */
+-	if (hdr_frm->relay) {
+-		cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_RELAY,
+-					  BIT(0), BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_RELAY,
++				  hdr_frm->relay, BIT(0));
++	if (hdr_frm->relay)
+ 		return 0;
+-	}
+ 
+ 	if (!MDP_COLOR_IS_YUV(src_fmt))
+ 		hdr_rgb_to_yuv(task, path, n);
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+index 84a157c6de9d..6666bc090a03 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+@@ -430,22 +430,57 @@ static int tp_select_path_mt8195(struct mdp_alg_task *task)
+ {
+ 	struct mdp_alg_frame_config *cfg = &task->cfg;
+ 	struct mdp_alg_path_tp *p = &cfg->path[MDP_ALG_1ST_PIPE];
++	const struct tp_map *map[MDP_ALG_MAX_PIPE];
++	bool rx_enable = false;
++	u8 mutex_ofst;
+ 	int ret;
+ 
+-	ret = tp_parse_path(task->mdp, p, mt8195_path_map[TP_PATH_FULL_PQ_P0]);
++	cfg->dual = false;
++	if (task->mdp->cap_open_count > 0)
++		rx_enable = true;
++
++	switch (cfg->param->type) {
++	case MDP_STREAM_TYPE_DUAL_BITBLT:
++		if (rx_enable)
++			map[MDP_ALG_2ND_PIPE] = mt8195_path_map[TP_PATH_FULL_PQ_P1];
++		else
++			map[MDP_ALG_2ND_PIPE] = mt8195_path_map[TP_PATH_FULL_PQ_P3];
++		cfg->dual = true;
++		fallthrough;
++	case MDP_STREAM_TYPE_BITBLT:
++		if (rx_enable)
++			map[MDP_ALG_1ST_PIPE] = mt8195_path_map[TP_PATH_FULL_PQ_P0];
++		else
++			map[MDP_ALG_1ST_PIPE] = mt8195_path_map[TP_PATH_FULL_PQ_P2];
++		mutex_ofst = 0;
++		break;
++	case MDP_STREAM_TYPE_HDMI_RX_DUAL:
++		map[MDP_ALG_2ND_PIPE] = mt8195_path_map[TP_PATH_HDMI_RX_P1];
++		cfg->dual = true;
++		fallthrough;
++	case MDP_STREAM_TYPE_HDMI_RX:
++		map[MDP_ALG_1ST_PIPE] = mt8195_path_map[TP_PATH_HDMI_RX_P0];
++		mutex_ofst = MDP_ALG_MAX_PIPE;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	ret = tp_parse_path(task->mdp, p, map[MDP_ALG_1ST_PIPE]);
+ 	if (ret)
+ 		return ret;
+ 	p->path_id = MDP_ALG_1ST_PIPE;
+-	p->mutex_idx = MDP_ALG_1ST_PIPE;
++	p->mutex_idx = MDP_ALG_1ST_PIPE + mutex_ofst;
++	p->cmdq_clt_idx = MDP_ALG_1ST_PIPE + mutex_ofst;
+ 
+-	if (cfg->param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
++	if (cfg->dual) {
+ 		p = &cfg->path[MDP_ALG_2ND_PIPE];
+-		ret = tp_parse_path(task->mdp, p, mt8195_path_map[TP_PATH_FULL_PQ_P1]);
++		ret = tp_parse_path(task->mdp, p, map[MDP_ALG_2ND_PIPE]);
+ 		if (ret)
+ 			return ret;
+-		p->path_id = MDP_ALG_1ST_PIPE;
+-		p->mutex_idx = MDP_ALG_2ND_PIPE;
+-		cfg->dual = true;
++		p->path_id = MDP_ALG_2ND_PIPE;
++		p->mutex_idx = MDP_ALG_2ND_PIPE + mutex_ofst;
++		p->cmdq_clt_idx = MDP_ALG_2ND_PIPE + mutex_ofst;
+ 	}
+ 
+ 	return ret;
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+index 9a663db25c5c..835ca4eeea69 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+@@ -18,6 +18,7 @@ struct wrot_data {
+ 	u32 tile_width;
+ 	u32 sram_size;
+ 	u8 rb_swap;	/* version for rb channel swap behavior */
++	u8 force_swap;
+ };
+ 
+ /* meta data for each different frame config */
+@@ -52,6 +53,9 @@ struct wrot_frame_data {
+ 	/* calculate in frame, use in each tile calc */
+ 	u32 fifo_max_sz;
+ 	u32 max_line_cnt;
++
++	/* HDMI-RX profile */
++	bool hdr_r2y;
+ };
+ 
+ struct wrot_ofst_addr {
+@@ -90,11 +94,15 @@ static const struct wrot_data mt8189_wrot_data = {
+ static const struct wrot_data mt8195_wrot_main_data = {
+ 	.fifo = 1024,
+ 	.tile_width = 1920,
++	.rb_swap = true,
++	.force_swap = true,
+ };
+ 
+ static const struct wrot_data mt8195_wrot_sub_data = {
+ 	.fifo = 512,
+ 	.tile_width = 512,
++	.rb_swap = true,
++	.force_swap = true,
+ };
+ 
+ /* filt_h, filt_v, uv_xsel, uv_ysel */
+@@ -277,6 +285,10 @@ static int wrot_prepare(struct mdp_alg_task *task,
+ 	for (i = 0; i < IMG_MAX_PLANES; i++)
+ 		wrot_frm->iova[i] = dst_buf->iova[i];
+ 
++	if (task->cfg.param->type == MDP_STREAM_TYPE_HDMI_RX ||
++	    task->cfg.param->type == MDP_STREAM_TYPE_HDMI_RX_DUAL)
++		wrot_frm->hdr_r2y = true;
++
+ 	return 0;
+ }
+ 
+@@ -377,6 +389,11 @@ static void wrot_color_fmt(struct mdp_alg_task *task, struct mdp_alg_path_tp *pa
+ 		break;
+ 	}
+ 
++	if (profile_in == MDP_YCBCR_PROFILE_RGB &&
++	    profile_out == MDP_YCBCR_PROFILE_JPEG)
++		if (fmt == MDP_COLOR_RGB565 || fmt == MDP_COLOR_BGR565)
++			wrot_frm->mat_en = 0;
++
+ 	/*
+ 	 * 4'b0000: RGB to JPEG
+ 	 * 4'b0010: RGB to BT601
+@@ -397,15 +414,23 @@ static void wrot_color_fmt(struct mdp_alg_task *task, struct mdp_alg_path_tp *pa
+ 		profile_in = MDP_YCBCR_PROFILE_BT709;
+ 
+ 	if (wrot_frm->mat_en == 1) {
+-		if (profile_in == MDP_YCBCR_PROFILE_BT601)
++		if (profile_in == MDP_YCBCR_PROFILE_BT601) {
+ 			wrot_frm->mat_sel = 6;
+-		else if (profile_in == MDP_YCBCR_PROFILE_BT709)
++		} else if (profile_in == MDP_YCBCR_PROFILE_BT709) {
+ 			wrot_frm->mat_sel = 7;
+-		else if (profile_in == MDP_YCBCR_PROFILE_JPEG)
++		} else if (profile_in == MDP_YCBCR_PROFILE_JPEG) {
+ 			wrot_frm->mat_sel = 4;
+-		else
++		} else if (profile_in == MDP_YCBCR_PROFILE_RGB &&
++			profile_out == MDP_YCBCR_PROFILE_JPEG) {
++			wrot_frm->mat_en = 1;
++			if (wrot_frm->hdr_r2y)
++				wrot_frm->mat_sel = 7;
++			else
++				wrot_frm->mat_sel = 0;
++		} else {
+ 			dev_err(dev, "unknown profile conversion %x",
+ 				profile_in);
++		}
+ 	} else {
+ 		if (profile_in == MDP_YCBCR_PROFILE_JPEG &&
+ 		    profile_out == MDP_YCBCR_PROFILE_BT601) {
+@@ -431,6 +456,25 @@ static void wrot_color_fmt(struct mdp_alg_task *task, struct mdp_alg_path_tp *pa
+ 			   profile_out == MDP_YCBCR_PROFILE_BT709) {
+ 			wrot_frm->mat_en = 1;
+ 			wrot_frm->mat_sel = 13;
++		} else if (profile_in == MDP_YCBCR_PROFILE_RGB &&
++			   profile_out == MDP_YCBCR_PROFILE_FULL_BT709) {
++			wrot_frm->mat_en = 1;
++			wrot_frm->mat_sel = 1;
++		} else if (profile_in == MDP_YCBCR_PROFILE_RGB &&
++			   profile_out == MDP_YCBCR_PROFILE_BT601) {
++			wrot_frm->mat_en = 1;
++			if (wrot_frm->hdr_r2y)
++				wrot_frm->mat_sel = 12;
++			else
++				wrot_frm->mat_sel = 2;
++		} else if (profile_in == MDP_YCBCR_PROFILE_RGB &&
++			   profile_out == MDP_YCBCR_PROFILE_BT709) {
++			if (!wrot_frm->hdr_r2y) {
++				wrot_frm->mat_en = 1;
++				wrot_frm->mat_sel = 3;
++			} else {
++				wrot_frm->mat_en = 0;
++			}
+ 		}
+ 	}
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+index ef260d8fb2c0..1497a9135bbe 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+@@ -96,6 +96,7 @@ struct mdp_alg_path_tp {
+ 	s32 mmsys_idx;
+ 	struct device *mutex;
+ 	s32 mutex_idx;
++	u32 cmdq_clt_idx;
+ 
+ 	u8 tile_engines[MDP_ALG_MAX_PATH_NODES];
+ 	u8 tile_engine_cnt;
+@@ -245,6 +246,7 @@ struct mdp_alg_task {
+ 	struct mdp_alg_tile_cache *t_cache[MDP_ALG_MAX_PIPE];
+ 	struct mdp_alg_frame_config cfg;
+ 	struct cmdq_pkt *pkts[MDP_ALG_MAX_PIPE];
++	enum mdp_cmdq_user cmdq_id;
+ };
+ 
+ struct mdp_alg_comp_ops {
+@@ -297,6 +299,6 @@ static inline struct mdp_alg_tile_engine *config_get_tile(struct mdp_alg_task *t
+ int mdp_alg_tp_select_path(struct mdp_alg_task *task);
+ int mdp_alg_tile_calc(struct mdp_alg_task *task, u32 pipe);
+ int mdp_alg_submit(struct mdp_alg_task *task);
+-int mdp_alg_process(struct mdp_m2m_ctx *ctx, struct img_ipi_frameparam *param);
++int mdp_alg_process(void *ctx, struct img_ipi_frameparam *param);
+ 
+ #endif  /* __MTK_MDP3_ALG_H__ */
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+index 4df426771848..c3867b247437 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+@@ -270,6 +270,17 @@ static void mdp_cap_device_run(struct mdp_cap_ctx *ctx, struct v4l2_cap_buffer *
+ 		ctx->pp_enable = true;
+ 	}
+ 
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat) {
++		if (ctx->pp_enable)
++			param.type = MDP_STREAM_TYPE_HDMI_RX_DUAL;
++		else
++			param.type = MDP_STREAM_TYPE_HDMI_RX;
++		ret = mdp_alg_process((void *)ctx, &param);
++		if (ret)
++			goto worker_end;
++		return;
++	}
++
+ 	ret = mdp_vpu_process(&ctx->mdp_dev->vpu, &param, MDP_VPU_UID_CAP);
+ 	if (ret) {
+ 		dev_err(&ctx->mdp_dev->pdev->dev,
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.h
+index 882e74f27d57..946c1e6e2210 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.h
+@@ -44,6 +44,7 @@ struct mdp_cap_ctx {
+ 	u8				num_comps[MDP_PP_CONS_MAX];
+ 	struct mdp_comp			*comps[MDP_PP_CONS_MAX];
+ 	struct mtk_mutex		*mutex[MDP_PP_CONS_MAX];
++	struct mdp_alg_tile_cache	tile_cache[MDP_ALG_MAX_PIPE];
+ };
+ 
+ struct v4l2_cap_buffer {
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cmdq.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cmdq.h
+index 50b49d6f8961..a2f4899ef50e 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cmdq.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cmdq.h
+@@ -17,7 +17,6 @@ struct platform_device *mdp_get_plat_device(struct platform_device *pdev);
+ enum mdp_cmdq_user {
+ 	MDP_CMDQ_USER_M2M = 0,
+ 	MDP_CMDQ_USER_CAP,
+-	MDP_CMDQ_USER_ALG,
+ 	MDP_CMDQ_USER_MAX,
+ };
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
+index fbd804fe3ad6..6f428b7897ae 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
+@@ -101,7 +101,7 @@ static void mdp_m2m_device_run(void *priv)
+ 		param.type = MDP_STREAM_TYPE_DUAL_BITBLT;
+ 
+ 	if (ctx->mdp_dev->mdp_data->mdp_alg_plat) {
+-		ret = mdp_alg_process(ctx, &param);
++		ret = mdp_alg_process((void *)ctx, &param);
+ 		if (ret)
+ 			goto worker_end;
+ 		return;
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-regs.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-regs.h
+index 19567741bec5..0c4ecf9a56ed 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-regs.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-regs.h
+@@ -318,6 +318,8 @@ enum mdp_stream_type {
+ 	MDP_STREAM_TYPE_ISP_ZSD_SLOW,
+ 	MDP_STREAM_TYPE_WPE,
+ 	MDP_STREAM_TYPE_WPE2,
++	MDP_STREAM_TYPE_HDMI_RX,
++	MDP_STREAM_TYPE_HDMI_RX_DUAL,
+ };
+ 
+ struct mdp_crop {
+-- 
+2.45.2
+

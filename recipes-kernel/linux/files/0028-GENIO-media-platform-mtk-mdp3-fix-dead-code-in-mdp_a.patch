@@ -1,0 +1,38 @@
+From 720eaf5f9103fb3e61d156d7259a2a2e35161007 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Fri, 8 May 2026 08:46:56 +0800
+Subject: [PATCH 28/35] GENIO: media: platform: mtk-mdp3: fix dead code in
+ mdp_alg_submit
+
+Fix incorrect NULL check and unreachable return statement. The original
+code checked the array pointer instead of the array element, making the
+condition always false. Also, return -ENOMEM instead of uninitialized ret.
+
+Coverity issue:
+(4) Event dead_error_line: Execution cannot reach this statement:
+"return ret;".
+
+Change-Id: If2355b767a2897a0071aa914cab977ba0231770e
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_alg_core.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+index 23fc93dd8d8d..cdae2188a9f6 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+@@ -557,8 +557,8 @@ int mdp_alg_submit(struct mdp_alg_task *task)
+ 
+ 	for (i = 0; i < pipe_used; i++) {
+ 		cmd[i] = prepare_cmdq(task, i);
+-		if (!cmd)
+-			return ret;
++		if (!cmd[i])
++			return -ENOMEM;
+ 
+ 		ret = prepare_comp(task, i);
+ 		if (ret)
+-- 
+2.45.2
+

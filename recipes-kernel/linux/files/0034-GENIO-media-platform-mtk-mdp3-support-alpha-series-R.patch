@@ -1,0 +1,120 @@
+From 2934f66b5deade142cdb08028ef081b4a0b1fe01 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Tue, 16 Jun 2026 15:08:05 +0800
+Subject: [PATCH 34/35] GENIO: media: platform: mtk-mdp3: support alpha-series
+ RGB formats
+
+Configure RDMA and WROT hardware to support alpha-series RGB formats to
+avoid channel mismatch.
+
+CR-Id: AUTO00855979
+Change-Id: Icbd4ad4671c5d24d033e4868ca826acf4bc2914f
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mdp_alg_rdma.c     | 26 +++++++++++++------
+ .../platform/mediatek/mdp3/mdp_alg_wrot.c     |  8 +++++-
+ 2 files changed, 25 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c
+index 5ac65bbf6d9c..3d04a525a567 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c
+@@ -331,7 +331,9 @@ static int rdma_config_frame(struct mdp_alg_task *task,
+ 
+ 	rdma_color_fmt(&task->mdp->pdev->dev, cfg, rdma_frm);
+ 
+-	if (MDP_COLOR_IS_10BIT_PACKED(src_fmt))
++	if (cfg->alpharot)
++		rdma_frm->color_tran = 0;
++	else if (MDP_COLOR_IS_10BIT_PACKED(src_fmt))
+ 		rdma_frm->color_tran = 1;
+ 
+ 	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_RDMA_TRANSFORM_0,
+@@ -356,14 +358,21 @@ static int rdma_config_frame(struct mdp_alg_task *task,
+ 
+ 	in_swap = rdma_frm->swap;
+ 	if (MDP_COLOR_IS_AFBC(dst_fmt) && MDP_COLOR_IS_10BIT_PACKED(dst_fmt)) {
++		bool src_afbc = MDP_COLOR_IS_AFBC(src_fmt);
++		bool src_rgb = MDP_COLOR_IS_RGB(src_fmt);
++		bool dst_swap = MDP_COLOR_IS_SWAPPED(dst_fmt);
++
+ 		if (rdma->rb_swap == 1) {
+-			if (MDP_COLOR_IS_RGB(src_fmt) &&
+-			    !MDP_COLOR_IS_SWAPPED(dst_fmt))
+-				in_swap = in_swap ? 0 : 1;
++			if (cfg->alpharot) {
++				if (src_afbc == dst_swap)
++					in_swap = !in_swap;
++			} else {
++				if (src_rgb && !dst_swap)
++					in_swap = !in_swap;
++			}
+ 		} else if (rdma->rb_swap == 2) {
+-			if (MDP_COLOR_IS_RGB(src_fmt) &&
+-			    !MDP_COLOR_IS_SWAPPED(dst_fmt))
+-				in_swap = in_swap ? 0 : 1;
++			if (src_rgb && !dst_swap)
++				in_swap = !in_swap;
+ 		}
+ 	}
+ 
+@@ -377,7 +386,8 @@ static int rdma_config_frame(struct mdp_alg_task *task,
+ 				  (1 << 17) +	/* UNIFORM_CONFIG */
+ 				  (bit_number << 18) +
+ 				  (rdma_frm->blk_tile << 23) +
+-				  (0 << 24),	/* RING_BUF_READ */
++				  (0 << 24) +	/* RING_BUF_READ */
++				  (cfg->alpharot << 25),
+ 				  U32_MAX);
+ 
+ 	if (rdma_frm->blk_10bit)
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+index 1b8c7aebefef..9f115edc8585 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+@@ -536,6 +536,7 @@ static void calc_afbc_block(u32 bits_per_pixel, u32 y_stride, u32 height,
+ }
+ 
+ static void wrot_calc_hw_buf_setting(const struct wrot_data *wrot,
++				     struct mdp_alg_frame_config *cfg,
+ 				     u32 fmt,
+ 				     struct wrot_frame_data *wrot_frm)
+ {
+@@ -553,6 +554,9 @@ static void wrot_calc_hw_buf_setting(const struct wrot_data *wrot,
+ 	} else if (fmt == MDP_COLOR_GREY) {
+ 		wrot_frm->fifo_max_sz = wrot->tile_width * 64;
+ 		wrot_frm->max_line_cnt = 64;
++	} else if (cfg->alpharot) {
++		wrot_frm->fifo_max_sz = wrot->tile_width * 16;
++		wrot_frm->max_line_cnt = 16;
+ 	} else {
+ 		wrot_frm->fifo_max_sz = wrot->tile_width * 32;
+ 		wrot_frm->max_line_cnt = 32;
+@@ -638,7 +642,7 @@ static s32 wrot_config_frame(struct mdp_alg_task *task,
+ 	wrot_color_fmt(task, path, n, wrot_frm);
+ 
+ 	/* calculate for later config tile use */
+-	wrot_calc_hw_buf_setting(wrot, hw_fmt, wrot_frm);
++	wrot_calc_hw_buf_setting(wrot, cfg, hw_fmt, wrot_frm);
+ 
+ 	if (cfg->alpharot) {
+ 		wrot_frm->mat_en = 0;
+@@ -1138,6 +1142,7 @@ static int wrot_tile_prepare(struct mdp_alg_task *task,
+ {
+ 	const struct wrot_frame_data *wrot_frm = wrot_frm_data(path, n);
+ 	struct img_ipi_frameparam *p = task->cfg.param;
++	struct mdp_alg_frame_config *cfg = &task->cfg;
+ 	struct img_image_buffer *dst_buf = &p->outputs[path->nodes[n].out_idx].buffer;
+ 	const struct wrot_data *wrot = get_private_data(task, path, n);
+ 
+@@ -1147,6 +1152,7 @@ static int wrot_tile_prepare(struct mdp_alg_task *task,
+ 	data->wrot.dest_fmt = dst_buf->format.colorformat;
+ 	data->wrot.rotate = wrot_frm->rotate;
+ 	data->wrot.flip = wrot_frm->flip;
++	data->wrot.alpha = cfg->alpharot;
+ 
+ 	data->wrot.enable_x_crop = wrot_frm->en_x_crop;
+ 	data->wrot.enable_y_crop = wrot_frm->en_y_crop;
+-- 
+2.45.2
+

@@ -1,0 +1,118 @@
+From 5275987d4cf3831ec03581ecf9aa47e1633cd220 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Fri, 8 May 2026 08:49:03 +0800
+Subject: [PATCH 29/35] GENIO: media: platform: mtk-mdp3: fix enum used as
+ boolean in conditional
+
+Replace implicit enum-to-boolean conversions with explicit comparisons
+against enum values to comply with CERT coding standards.
+
+Coverity issues:
+Event ENUM_AS_BOOLEAN: Enum value used as boolean in conditional.
+
+Fixed in:
+- mdp_alg_hdr.c:69 (rx_xfer_func check)
+- mtk-mdp3-capture.c:293,468 (mdp_alg_plat checks)
+- mtk-mdp3-core.c:166,305,367 (mdp_alg_plat checks)
+- mtk-mdp3-m2m.c:103,184 (mdp_alg_plat checks)
+
+Change-Id: I5b8785abf63e49ac8d772bedb5a1ad631bf560f0
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c      | 2 +-
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c | 4 ++--
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c    | 6 +++---
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c     | 4 ++--
+ 4 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+index 7255c6e4821c..28c48854b55f 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+@@ -66,7 +66,7 @@ static int hdr_prepare(struct mdp_alg_task *task,
+ 		return 0;
+ 	}
+ 
+-	if (task->mdp->rx_cap_intf.rx_xfer_func) {
++	if (task->mdp->rx_cap_intf.rx_xfer_func != HDMIRX_INTF_XFER_SDR) {
+ 		hdr_frm->hdr2sdr = true;
+ 		hdr_frm->hdr_top |= (BIT(27) | BIT(24) | BIT(19));
+ 	}
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+index fcc1b9675501..a17e47478122 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+@@ -290,7 +290,7 @@ static void mdp_cap_device_run(struct mdp_cap_ctx *ctx, struct v4l2_cap_buffer *
+ 		ctx->pp_enable = true;
+ 	}
+ 
+-	if (ctx->mdp_dev->mdp_data->mdp_alg_plat) {
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT) {
+ 		if (ctx->pp_enable)
+ 			param.type = MDP_STREAM_TYPE_HDMI_RX_DUAL;
+ 		else
+@@ -465,7 +465,7 @@ static int mdp_cap_start_streaming(struct vb2_queue *q, unsigned int count)
+ 		}
+ 	}
+ 
+-	if (ctx->mdp_dev->mdp_data->mdp_alg_plat)
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT)
+ 		goto worker_end;
+ 
+ 	if (!mdp_cap_ctx_is_state_set(ctx, MDP_VPU_INIT)) {
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+index e6c27f58d674..9711835ba4bb 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+@@ -163,7 +163,7 @@ void mdp_video_device_release(struct video_device *vdev)
+ 
+ 	mdp_vpu_shared_mem_free(&mdp->vpu);
+ 
+-	if (!mdp->mdp_data->mdp_alg_plat)
++	if (mdp->mdp_data->mdp_alg_plat == MDP_ALG_NOSUPPPORT)
+ 		scp_put(mdp->scp);
+ 
+ 	destroy_workqueue(mdp->job_wq);
+@@ -306,7 +306,7 @@ static int mdp_probe(struct platform_device *pdev)
+ 		goto err_destroy_job_wq;
+ 	}
+ 
+-	if (mdp->mdp_data->mdp_alg_plat)
++	if (mdp->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT)
+ 		goto scp_comm_unused;
+ 
+ 	mdp->scp = scp_get(pdev);
+@@ -368,7 +368,7 @@ static int mdp_probe(struct platform_device *pdev)
+ err_mbox_destroy:
+ 	while (--i >= 0)
+ 		cmdq_mbox_destroy(mdp->cmdq_clt[i]);
+-	if (!mdp->mdp_data->mdp_alg_plat)
++	if (mdp->mdp_data->mdp_alg_plat == MDP_ALG_NOSUPPPORT)
+ 		scp_put(mdp->scp);
+ err_destroy_clock_wq:
+ 	destroy_workqueue(mdp->clock_wq);
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
+index 6f428b7897ae..8abb4a9e3541 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
+@@ -100,7 +100,7 @@ static void mdp_m2m_device_run(void *priv)
+ 	if (mdp_check_pp_enable(ctx->mdp_dev, frame))
+ 		param.type = MDP_STREAM_TYPE_DUAL_BITBLT;
+ 
+-	if (ctx->mdp_dev->mdp_data->mdp_alg_plat) {
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT) {
+ 		ret = mdp_alg_process((void *)ctx, &param);
+ 		if (ret)
+ 			goto worker_end;
+@@ -181,7 +181,7 @@ static int mdp_m2m_start_streaming(struct vb2_queue *q, unsigned int count)
+ 		}
+ 	}
+ 
+-	if (ctx->mdp_dev->mdp_data->mdp_alg_plat)
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT)
+ 		return 0;
+ 
+ 	if (!mdp_m2m_ctx_is_state_set(ctx, MDP_VPU_INIT)) {
+-- 
+2.45.2
+

@@ -1,0 +1,163 @@
+From bc5fce05f3349db33b73d9f6c36f0f08d759a14b Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Mon, 20 Apr 2026 11:55:07 +0800
+Subject: [PATCH 24/35] GENIO: media: platform: mtk-mdp3: add support HDMI-RX
+ HDR to SDR
+
+Implement HDR-to-SDR tone mapping configuration to support HDR content
+received from HDMI-RX. This setup converts high dynamic range input
+into standard dynamic range for subsequent image processing stages.
+
+Change-Id: I1e2ee0602b127850314b268f27ef5bebda4f47b9
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mdp_alg_hdr.c      | 55 +++++++++++++++++--
+ .../platform/mediatek/mdp3/mdp_reg_hdr.h      | 20 +++++++
+ 2 files changed, 70 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+index 7f56afcf9025..83182b51d0e8 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+@@ -24,6 +24,7 @@ static const struct hdr_data mt8195_hdr_data = {
+ struct hdr_frame_data {
+ 	u32 hdr_top;
+ 	bool relay;
++	bool hdr2sdr;
+ };
+ 
+ static inline struct hdr_frame_data *hdr_frm_data(struct mdp_alg_path_tp *path,
+@@ -57,16 +58,24 @@ static int hdr_prepare(struct mdp_alg_task *task,
+ 		return -ENOMEM;
+ 	path->nodes[n].data = (void *)hdr_frm;
+ 
+-	if (task->cfg.param->type == MDP_STREAM_TYPE_BITBLT ||
+-	    task->cfg.param->type == MDP_STREAM_TYPE_DUAL_BITBLT)
++	hdr_frm->hdr_top = BIT(0);
++
++	if (task->cfg.param->type != MDP_STREAM_TYPE_HDMI_RX &&
++	    task->cfg.param->type != MDP_STREAM_TYPE_HDMI_RX_DUAL) {
+ 		hdr_frm->relay = true;
+-	else if (MDP_COLOR_IS_YUV(src_fmt))
++		return 0;
++	}
++
++	if (task->mdp->rx_cap_intf.rx_xfer_func) {
++		hdr_frm->hdr2sdr = true;
++		hdr_frm->hdr_top |= (BIT(27) | BIT(24) | BIT(19));
++	}
++
++	if (MDP_COLOR_IS_YUV(src_fmt) && !hdr_frm->hdr2sdr)
+ 		hdr_frm->relay = true;
+ 	else
+ 		hdr_frm->relay = false;
+ 
+-	hdr_frm->hdr_top = 1;
+-
+ 	return 0;
+ }
+ 
+@@ -133,6 +142,39 @@ static void hdr_rgb_to_yuv(struct mdp_alg_task *task,
+ 				  MDP_HDR_R2Y_09_MASK);
+ }
+ 
++static void hdr_to_sdr(struct mdp_alg_task *task,
++		       struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	int i;
++	u32 slope = 32768; /* Panel nits */
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P01,
++				  (200 << 16) | 15, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P02,
++				  (1800 << 16) | 9002, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P03,
++				  (3000 << 16) | 2300, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P04,
++				  U32_MAX, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P05,
++				  U32_MAX, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P06,
++				  U32_MAX, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P07,
++				  U32_MAX, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TONE_MAP_P08,
++				  U32_MAX, U32_MAX);
++
++	for (i = 0; i < 16; i++)
++		cmdq_pkt_write_value_addr(pkt,
++					  base_pa + MDP_HDR_TONE_MAP_S00 + (i * 4),
++					  slope, U32_MAX);
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TMO_TOP, BIT(0), BIT(0));
++}
++
+ static int hdr_config_frame(struct mdp_alg_task *task,
+ 			    struct mdp_alg_path_tp *path, u32 n)
+ {
+@@ -162,6 +204,9 @@ static int hdr_config_frame(struct mdp_alg_task *task,
+ 	if (!MDP_COLOR_IS_YUV(src_fmt))
+ 		hdr_rgb_to_yuv(task, path, n);
+ 
++	if (hdr_frm->hdr2sdr)
++		hdr_to_sdr(task, path, n);
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_reg_hdr.h b/drivers/media/platform/mediatek/mdp3/mdp_reg_hdr.h
+index c63b92cd6a10..08f7a46b33de 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_reg_hdr.h
++++ b/drivers/media/platform/mediatek/mdp3/mdp_reg_hdr.h
+@@ -15,6 +15,15 @@
+ #define MDP_HDR_HIST_CTRL_0		(0x020)
+ #define MDP_HDR_HIST_CTRL_1		(0x024)
+ #define MDP_HDR_3x3_COEF_00		(0x038)
++#define MDP_HDR_TONE_MAP_P01		(0x078)
++#define MDP_HDR_TONE_MAP_P02		(0x07C)
++#define MDP_HDR_TONE_MAP_P03		(0x080)
++#define MDP_HDR_TONE_MAP_P04		(0x084)
++#define MDP_HDR_TONE_MAP_P05		(0x088)
++#define MDP_HDR_TONE_MAP_P06		(0x08C)
++#define MDP_HDR_TONE_MAP_P07		(0x090)
++#define MDP_HDR_TONE_MAP_P08		(0x094)
++#define MDP_HDR_TONE_MAP_S00		(0x098)
+ #define MDP_HDR_B_CHANNEL_NR		(0x0D8)
+ #define MDP_HDR_A_LUMINANCE		(0x0E4)
+ #define MDP_HDR_LBOX_DET_1		(0x0F4)
+@@ -35,6 +44,7 @@
+ #define MDP_HDR_R2Y_09			(0x14C)
+ #define MDP_HDR_HIST_ADDR		(0x0DC)
+ #define MDP_HDR_TILE_POS		(0x118)
++#define MDP_HDR_TMO_TOP			(0x1B0)
+ 
+ /* MASK */
+ #define MDP_HDR_RELAY_MASK		(0x01)
+@@ -44,6 +54,15 @@
+ #define MDP_HDR_SIZE_2_MASK		(0x1FFF1FFF)
+ #define MDP_HDR_HIST_CTRL_0_MASK	(0x1FFF1FFF)
+ #define MDP_HDR_HIST_CTRL_1_MASK	(0x1FFF1FFF)
++#define MDP_HDR_TONE_MAP_P01_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P02_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P03_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P04_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P05_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P06_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P07_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_P08_MASK	(0xFFFFFFFF)
++#define MDP_HDR_TONE_MAP_S00_MASK	(0xFFFFFFFF)
+ #define MDP_HDR_HIST_ADDR_MASK		(0xBF3F2F3F)
+ #define MDP_HDR_TILE_POS_MASK		(0x1FFF1FFF)
+ #define MDP_HDR_HLG_SG_MASK		(0x0000FFFF)
+@@ -57,5 +76,6 @@
+ #define MDP_HDR_R2Y_07_MASK		(0x7FF07FF)
+ #define MDP_HDR_R2Y_08_MASK		(0xFFFFFC00)
+ #define MDP_HDR_R2Y_09_MASK		(0x0F)
++#define MDP_HDR_TMO_TOP_MASK		(0xFFFFFFFF)
+ 
+ #endif // __MDP_REG_HDR_H__
+-- 
+2.45.2
+

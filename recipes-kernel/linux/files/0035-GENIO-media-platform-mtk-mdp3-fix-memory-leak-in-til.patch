@@ -1,0 +1,92 @@
+From 65272b4226d5131098a819479d89a1cf0b4379ef Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Wed, 17 Jun 2026 17:03:23 +0800
+Subject: [PATCH 35/35] GENIO: media: platform: mtk-mdp3: fix memory leak in
+ tile cache
+
+Add cleanup function to free tile cache resources including function
+lists and tile arrays. Call this cleanup in context release paths for
+both M2M and capture modes when algorithm platform is supported.
+
+Change-Id: If5ed810a8e8c147b4190954625f66984cf5a9875
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mdp_alg_tile.c     | 22 +++++++++++++++++++
+ .../platform/mediatek/mdp3/mtk-mdp3-alg.h     |  1 +
+ .../platform/mediatek/mdp3/mtk-mdp3-capture.c |  3 +++
+ .../platform/mediatek/mdp3/mtk-mdp3-m2m.c     |  3 +++
+ 4 files changed, 29 insertions(+)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tile.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tile.c
+index d433a0c21704..7976be131ac5 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_tile.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tile.c
+@@ -361,3 +361,25 @@ int mdp_alg_tile_calc(struct mdp_alg_task *task, u32 pipe)
+ 	tile_destroy_working(&ctx);
+ 	return ret;
+ }
++
++void mdp_alg_tile_clean_cache(struct mdp_alg_tile_cache *tile_cache)
++{
++	int i, j;
++
++	if (!tile_cache)
++		return;
++
++	for (i = 0; i < MDP_ALG_MAX_PIPE; i++) {
++		if (!tile_cache[i].ready)
++			continue;
++
++		for (j = 0; j < ARRAY_SIZE(tile_cache[i].func_list); j++) {
++			kfree(tile_cache[i].func_list[j]);
++			tile_cache[i].func_list[j] = NULL;
++		}
++
++		vfree(tile_cache[i].tiles);
++		tile_cache[i].tiles = NULL;
++		tile_cache[i].ready = false;
++	}
++}
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+index 4d7e0f9b04a6..fbe007f306d4 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+@@ -299,6 +299,7 @@ static inline struct mdp_alg_tile_engine *config_get_tile(struct mdp_alg_task *t
+ 
+ int mdp_alg_tp_select_path(struct mdp_alg_task *task);
+ int mdp_alg_tile_calc(struct mdp_alg_task *task, u32 pipe);
++void mdp_alg_tile_clean_cache(struct mdp_alg_tile_cache *tile_cache);
+ int mdp_alg_submit(struct mdp_alg_task *task);
+ int mdp_alg_process(void *ctx, struct img_ipi_frameparam *param);
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+index a17e47478122..4121d6f9de3f 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-capture.c
+@@ -635,6 +635,9 @@ static void mdp_clear_device(struct mdp_dev *mdp, struct mdp_cap_ctx *ctx)
+ 	if (mdp_cap_ctx_is_state_set(ctx, MDP_VPU_INIT))
+ 		mdp_vpu_put_locked(mdp);
+ 
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT)
++		mdp_alg_tile_clean_cache(ctx->tile_cache);
++
+ 	v4l2_ctrl_handler_free(&ctx->ctrl_handler);
+ 	v4l2_fh_del(&ctx->fh);
+ 	v4l2_fh_exit(&ctx->fh);
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
+index 8abb4a9e3541..0ea534b98de3 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-m2m.c
+@@ -700,6 +700,9 @@ static int mdp_m2m_release(struct file *file)
+ 	if (mdp_m2m_ctx_is_state_set(ctx, MDP_VPU_INIT))
+ 		mdp_vpu_put_locked(mdp);
+ 
++	if (ctx->mdp_dev->mdp_data->mdp_alg_plat != MDP_ALG_NOSUPPPORT)
++		mdp_alg_tile_clean_cache(ctx->tile_cache);
++
+ 	v4l2_ctrl_handler_free(&ctx->ctrl_handler);
+ 	v4l2_fh_del(&ctx->fh);
+ 	v4l2_fh_exit(&ctx->fh);
+-- 
+2.45.2
+

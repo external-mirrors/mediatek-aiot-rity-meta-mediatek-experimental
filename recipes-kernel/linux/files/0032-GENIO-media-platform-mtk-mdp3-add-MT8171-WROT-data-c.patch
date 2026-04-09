@@ -1,0 +1,45 @@
+From a352f05fedf505d4436d1b4dbd338baf7d638e6d Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Mon, 25 May 2026 15:35:59 +0800
+Subject: [PATCH 32/35] GENIO: media: platform: mtk-mdp3: add MT8171 WROT data
+ configuration
+
+Previously, the MT8171 configuration fell through to the MT8189 settings,
+which resulted in an incorrect FIFO size. This patch adds the specific
+MT8171 WROT data configuration to ensure the FIFO size is correctly set
+to 256 bits.
+
+Change-Id: Ia56f7051044d84746d4d49d4fb0a49a59a361e99
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+index 9ee82837b6c5..1b8c7aebefef 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+@@ -85,6 +85,12 @@ struct check_buf_param {
+ 	u32 uv_buf_usage;
+ };
+ 
++static const struct wrot_data mt8171_wrot_data = {
++	.fifo = 256,
++	.tile_width = 512,
++	.sram_size = 512 * 1024,
++};
++
+ static const struct wrot_data mt8189_wrot_data = {
+ 	.fifo = 512,
+ 	.tile_width = 512,
+@@ -215,6 +221,7 @@ static inline const struct wrot_data *get_private_data(struct mdp_alg_task *task
+ {
+ 	switch (task->mdp->mdp_data->mdp_alg_plat) {
+ 	case MDP_ALG_MT8171:
++		return &mt8171_wrot_data;
+ 	case MDP_ALG_MT8189:
+ 		return &mt8189_wrot_data;
+ 	case MDP_ALG_MT8195:
+-- 
+2.45.2
+

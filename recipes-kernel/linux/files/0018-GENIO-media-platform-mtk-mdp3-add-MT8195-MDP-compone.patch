@@ -1,0 +1,1631 @@
+From 3f2b99f8b15911f10e146c7e43dab8b31c71998a Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Wed, 18 Mar 2026 14:45:22 +0800
+Subject: [PATCH 18/35] GENIO: media: platform: mtk-mdp3: add MT8195 MDP
+ component selection algorithms
+
+To gradually reduce platform dependence on SCP, add more PQ-related MDP
+component selection algorithms in the kernel. This builds on the existing
+set of migrated components and expands support for MT8195.
+
+Change-Id: If6af45862a96b8ba502b26cdf8d55f81d44e9256
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/Makefile |   2 +
+ .../platform/mediatek/mdp3/mdp_alg_aal.c      | 175 ++++++++++
+ .../platform/mediatek/mdp3/mdp_alg_color.c    |  97 ++++++
+ .../platform/mediatek/mdp3/mdp_alg_core.c     |   8 +
+ .../media/platform/mediatek/mdp3/mdp_alg_fg.c | 112 +++++++
+ .../platform/mediatek/mdp3/mdp_alg_hdr.c      | 270 +++++++++++++++
+ .../platform/mediatek/mdp3/mdp_alg_ovl.c      |  64 ++++
+ .../platform/mediatek/mdp3/mdp_alg_pad.c      |  48 +++
+ .../platform/mediatek/mdp3/mdp_alg_split.c    | 314 ++++++++++++++++++
+ .../platform/mediatek/mdp3/mdp_alg_tdshp.c    | 214 ++++++++++++
+ .../platform/mediatek/mdp3/mdp_tile_comp.c    | 116 +++++++
+ .../platform/mediatek/mdp3/mdp_tile_comp.h    |   6 +
+ .../platform/mediatek/mdp3/mtk-mdp3-alg.h     |  17 +
+ 13 files changed, 1443 insertions(+)
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_color.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_fg.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_ovl.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_pad.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_split.c
+ create mode 100644 drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c
+
+diff --git a/drivers/media/platform/mediatek/mdp3/Makefile b/drivers/media/platform/mediatek/mdp3/Makefile
+index 8e2f6abc2d48..6911f2d02e39 100644
+--- a/drivers/media/platform/mediatek/mdp3/Makefile
++++ b/drivers/media/platform/mediatek/mdp3/Makefile
+@@ -3,6 +3,8 @@ mtk-mdp3-y += mdp_cfg_data.o mtk-mdp3-core.o mtk-mdp3-vpu.o mtk-mdp3-regs.o
+ mtk-mdp3-y += mdp_tile_comp.o mdp_tile_core.o mdp_tile_scaler.o
+ mtk-mdp3-y += mdp_alg_core.o mdp_alg_tp.o mdp_alg_tile.o
+ mtk-mdp3-y += mdp_alg_rdma.o mdp_alg_rsz.o mdp_alg_wrot.o
++mtk-mdp3-y += mdp_alg_aal.o mdp_alg_color.o mdp_alg_fg.o mdp_alg_hdr.o
++mtk-mdp3-y += mdp_alg_ovl.o mdp_alg_pad.o mdp_alg_split.o mdp_alg_tdshp.o
+ mtk-mdp3-y += mtk-mdp3-m2m.o
+ mtk-mdp3-y += mtk-mdp3-capture.o
+ mtk-mdp3-y += mtk-mdp3-comp.o mtk-mdp3-cmdq.o
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c
+new file mode 100644
+index 000000000000..192de5582841
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_aal.c
+@@ -0,0 +1,175 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_aal.h"
++#include "mdp_tile_core.h"
++#include "mdp_tile_comp.h"
++#include "mtk-mdp3-alg.h"
++#include "mtk-mdp3-core.h"
++
++struct aal_data {
++	u32 min_tile_width;
++	u32 tile_width;
++	u32 min_hist_width;
++	bool crop;
++};
++
++static const struct aal_data mt8195_aal_main_data = {
++	.tile_width = 1968,
++	.min_tile_width = 50,
++	.min_hist_width = 128,
++	.crop = true,
++};
++
++static const struct aal_data mt8195_aal_sub_data = {
++	.tile_width = 576,
++	.min_tile_width = 50,
++	.min_hist_width = 128,
++	.crop = true,
++};
++
++struct aal_frame_data {
++	bool relay_mode;
++};
++
++static inline struct aal_frame_data *aal_frm_data(struct mdp_alg_path_tp *path, u32 n)
++{
++	return path->nodes[n].data;
++}
++
++static inline const struct aal_data *get_private_data(struct mdp_alg_task *task,
++						      struct mdp_alg_path_tp *path,
++						      u32 n)
++{
++	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8195:
++		if (path->nodes[n].id == MDP_COMP_AAL2 ||
++		    path->nodes[n].id == MDP_COMP_AAL3)
++			return &mt8195_aal_main_data;
++		else
++			return &mt8195_aal_sub_data;
++	default:
++		return 0;
++	}
++}
++
++static int aal_prepare(struct mdp_alg_task *task,
++		       struct mdp_alg_path_tp *path, u32 n)
++{
++	struct aal_frame_data *aal_frm;
++
++	aal_frm = kzalloc(sizeof(*aal_frm), GFP_KERNEL);
++	if (!aal_frm)
++		return -ENOMEM;
++	path->nodes[n].data = (void *)aal_frm;
++
++	return 0;
++}
++
++static int aal_config_init(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_AAL_EN, BIT(0), BIT(0));
++
++	return 0;
++}
++
++static int aal_config_frame(struct mdp_alg_task *task,
++			    struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	struct img_ipi_frameparam *p = task->cfg.param;
++	struct img_image_buffer *src_buf = &p->inputs[0].buffer;
++	struct img_image_buffer *dst_buf = &p->outputs[0].buffer;
++	u32 cfg_main = BIT(7);
++
++	if (MDP_COLOR_IS_10BIT_PACKED(src_buf->format.colorformat) ||
++	    MDP_COLOR_IS_10BIT_PACKED(dst_buf->format.colorformat))
++		cfg_main = 0;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_AAL_CFG_MAIN,
++				  cfg_main, BIT(7));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_AAL_CFG, BIT(0), BIT(0));
++
++	return 0;
++}
++
++static int aal_config_tile(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path,
++			   u32 n, u32 t)
++{
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 aal_input_w, aal_input_h;
++	u32 aal_output_w, aal_output_h;
++	u32 aal_crop_x_offset, aal_crop_y_offset;
++
++	aal_input_w = tile->in.xe - tile->in.xs + 1;
++	aal_input_h = tile->in.ye - tile->in.ys + 1;
++	aal_output_w = tile->out.xe - tile->out.xs + 1;
++	aal_output_h = tile->out.ye - tile->out.ys + 1;
++	aal_crop_x_offset = tile->out.xs - tile->in.xs;
++	aal_crop_y_offset = tile->out.ys - tile->in.ys;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_AAL_SIZE,
++				  (aal_input_w << 16) + aal_input_h, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_AAL_OUTPUT_OFFSET,
++				  (aal_crop_x_offset << 16) + aal_crop_y_offset,
++				  U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_AAL_OUTPUT_SIZE,
++				  (aal_output_w << 16) + aal_output_h, U32_MAX);
++
++	return 0;
++}
++
++static int aal_tile_prepare(struct mdp_alg_task *task,
++			    struct mdp_alg_path_tp *path,
++			    u32 n,
++			    struct tile_func_block *func,
++			    union mdl_alg_tile_data *data)
++{
++	struct aal_frame_data *aal_frm = aal_frm_data(path, n);
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	const struct aal_data *aal = get_private_data(task, path, n);
++
++	func->for_func = tile_aal_for;
++	func->enable_flag = true;
++
++	func->full_size_x_in = cfg->frame_tile_sz.width;
++	func->full_size_y_in = cfg->frame_tile_sz.height;
++	func->full_size_x_out = func->full_size_x_in;
++	func->full_size_y_out = func->full_size_y_in;
++
++	func->in_tile_width = aal->tile_width;
++	func->out_tile_width = aal->tile_width;
++	func->in_tile_height = 65535;
++	func->out_tile_height = 65535;
++
++	if (aal->crop) {
++		func->l_tile_loss = 8;
++		func->r_tile_loss = 8;
++	} else {
++		func->l_tile_loss = 0;
++		func->r_tile_loss = 0;
++	}
++	func->in_min_width = min_t(u32, aal->min_hist_width, func->full_size_x_in);
++	func->in_min_width = max_t(u32, func->in_min_width, aal->min_tile_width);
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_aal = {
++	.comp_prepare = aal_prepare,
++	.comp_init = aal_config_init,
++	.config_frame = aal_config_frame,
++	.config_tile = aal_config_tile,
++	.tile_prepare = aal_tile_prepare,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_color.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_color.c
+new file mode 100644
+index 000000000000..de7d79244122
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_color.c
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_color.h"
++#include "mdp_tile_core.h"
++#include "mtk-mdp3-alg.h"
++
++struct color_frame_data {
++	bool relay;
++};
++
++static inline struct color_frame_data *color_frm_data(struct mdp_alg_path_tp *path,
++						      u32 n)
++{
++	return path->nodes[n].data;
++}
++
++static int color_prepare(struct mdp_alg_task *task,
++			 struct mdp_alg_path_tp *path, u32 n)
++{
++	struct color_frame_data *color_frm;
++
++	color_frm = kzalloc(sizeof(*color_frm), GFP_KERNEL);
++	if (!color_frm)
++		return -ENOMEM;
++	path->nodes[n].data = (void *)color_frm;
++
++	color_frm->relay = true;
++
++	return 0;
++}
++
++static int color_config_init(struct mdp_alg_task *task,
++			     struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_START,
++				  BIT(0), BIT(1) | BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_WIN_X_MAIN,
++				  0xFFFF0000, U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_WIN_Y_MAIN,
++				  0xFFFF0000, U32_MAX);
++
++	/* Reset color matrix */
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_CM1_EN, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_CM2_EN, 0, BIT(0));
++
++	/* Enable interrupt */
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_INTEN, 0x7, 0x7);
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_OUT_SEL,
++				  0x333, 0x333);
++
++	return 0;
++}
++
++static int color_config_frame(struct mdp_alg_task *task,
++			      struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_START,
++				  0x3, MDP_COLOR_START_MASK);
++
++	return 0;
++}
++
++static int color_config_tile(struct mdp_alg_task *task,
++			     struct mdp_alg_path_tp *path,
++			     u32 n, u32 t)
++{
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 width = tile->in.xe - tile->in.xs + 1;
++	u32 height = tile->in.ye - tile->in.ys + 1;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_INTERNAL_IP_WIDTH,
++				  width, 0x00003FFF);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_COLOR_INTERNAL_IP_HEIGHT,
++				  height, 0x00003FFF);
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_color = {
++	.comp_prepare = color_prepare,
++	.comp_init = color_config_init,
++	.config_frame = color_config_frame,
++	.config_tile = color_config_tile,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+index b20fb6983430..9a5aa80e781f 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+@@ -11,8 +11,16 @@
+ #include "mtk-mdp3-m2m.h"
+ 
+ const struct mdp_alg_comp_ops *mdp_alg_ops[MDP_COMP_TYPE_COUNT] = {
++	[MDP_COMP_TYPE_AAL] =	&alg_ops_aal,
++	[MDP_COMP_TYPE_COLOR] =	&alg_ops_color,
++	[MDP_COMP_TYPE_FG] =	&alg_ops_fg,
++	[MDP_COMP_TYPE_HDR] =	&alg_ops_hdr,
++	[MDP_COMP_TYPE_OVL] =	&alg_ops_ovl,
++	[MDP_COMP_TYPE_PAD] =	&alg_ops_pad,
+ 	[MDP_COMP_TYPE_RDMA] =	&alg_ops_rdma,
+ 	[MDP_COMP_TYPE_RSZ] =	&alg_ops_rsz,
++	[MDP_COMP_TYPE_SPLIT] =	&alg_ops_split,
++	[MDP_COMP_TYPE_TDSHP] =	&alg_ops_tdshp,
+ 	[MDP_COMP_TYPE_WROT] =	&alg_ops_wrot,
+ };
+ 
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_fg.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_fg.c
+new file mode 100644
+index 000000000000..3cabba0eed96
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_fg.c
+@@ -0,0 +1,112 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_fg.h"
++#include "mdp_tile_core.h"
++#include "mtk-mdp3-alg.h"
++
++struct fg_frame_data {
++	bool relay_mode;
++};
++
++static inline struct fg_frame_data *fg_frm_data(struct mdp_alg_path_tp *path,
++						u32 n)
++{
++	return path->nodes[n].data;
++}
++
++static int fg_prepare(struct mdp_alg_task *task,
++		      struct mdp_alg_path_tp *path, u32 n)
++{
++	struct fg_frame_data *fg_frm;
++
++	fg_frm = kzalloc(sizeof(*fg_frm), GFP_KERNEL);
++	if (!fg_frm)
++		return -ENOMEM;
++	path->nodes[n].data = (void *)fg_frm;
++
++	fg_frm->relay_mode = true;
++
++	return 0;
++}
++
++static int fg_config_init(struct mdp_alg_task *task,
++			  struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_FG_TRIGGER, BIT(2), BIT(2));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_FG_TRIGGER, 0, BIT(2));
++
++	return 0;
++}
++
++static int fg_config_frame(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_FG_FG_CTRL_0, BIT(0), BIT(7));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_FG_FG_CK_EN, 0x7, 0x7);
++
++	return 0;
++}
++
++static int fg_config_tile(struct mdp_alg_task *task,
++			  struct mdp_alg_path_tp *path,
++			  u32 n, u32 t)
++{
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 width = tile->in.xe - tile->in.xs + 1;
++	u32 height = tile->in.ye - tile->in.ys + 1;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_FG_TILE_INFO_0,
++				  tile->in.xs + (width << 16), U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_FG_TILE_INFO_1,
++				  tile->in.ys + (height << 16), U32_MAX);
++
++	return 0;
++}
++
++static int fg_tile_prepare(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path,
++			   u32 n,
++			   struct tile_func_block *func,
++			   union mdl_alg_tile_data *data)
++{
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	const struct img_frame *frame_in = &cfg->frame_in;
++	struct mdp_alg_path_node *node = &path->nodes[n];
++	const struct img_crop *crop = &cfg->frame_in_crop[node->out_idx];
++
++	func->enable_flag = true;
++
++	if (cfg->param->num_outputs == 1 &&
++	    (crop->width != frame_in->width ||
++	    crop->height != frame_in->height)) {
++		func->full_size_x_in = cfg->frame_tile_sz.width + crop->left;
++		func->full_size_y_in = cfg->frame_tile_sz.height + crop->top;
++	} else {
++		func->full_size_x_in = frame_in->width;
++		func->full_size_y_in = frame_in->height;
++	}
++	func->full_size_x_out = func->full_size_x_in;
++	func->full_size_y_out = func->full_size_y_in;
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_fg = {
++	.comp_prepare = fg_prepare,
++	.comp_init = fg_config_init,
++	.config_frame = fg_config_frame,
++	.config_tile = fg_config_tile,
++	.tile_prepare = fg_tile_prepare,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+new file mode 100644
+index 000000000000..6962443bbfd6
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_hdr.c
+@@ -0,0 +1,270 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_hdr.h"
++#include "mdp_tile_core.h"
++#include "mdp_tile_comp.h"
++#include "mdp_tile_scaler.h"
++#include "mtk-mdp3-alg.h"
++#include "mtk-mdp3-core.h"
++
++struct hdr_data {
++	u32 min_tile_width;
++	u32 tile_loss;
++};
++
++static const struct hdr_data mt8195_hdr_data = {
++	.min_tile_width = 16,
++};
++
++/* meta data for each different frame config */
++struct hdr_frame_data {
++	u32 hdr_top;
++	bool relay;
++};
++
++static inline struct hdr_frame_data *hdr_frm_data(struct mdp_alg_path_tp *path,
++						  u32 n)
++{
++	return path->nodes[n].data;
++}
++
++static inline const struct hdr_data *get_private_data(struct mdp_alg_task *task,
++						      struct mdp_alg_path_tp *path,
++						      u32 n)
++{
++	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8195:
++		return &mt8195_hdr_data;
++	default:
++		return 0;
++	}
++}
++
++static int hdr_prepare(struct mdp_alg_task *task,
++		       struct mdp_alg_path_tp *path, u32 n)
++{
++	struct hdr_frame_data *hdr_frm;
++
++	hdr_frm = kzalloc(sizeof(*hdr_frm), GFP_KERNEL);
++	if (!hdr_frm)
++		return -ENOMEM;
++	path->nodes[n].data = (void *)hdr_frm;
++
++	if (task->cfg.param->type == MDP_STREAM_TYPE_BITBLT ||
++	    task->cfg.param->type == MDP_STREAM_TYPE_DUAL_BITBLT)
++		hdr_frm->relay = true;
++
++	hdr_frm->hdr_top = 0xB0B0001;
++
++	return 0;
++}
++
++static int hdr_config_init(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TOP, BIT(0), BIT(0));
++
++	return 0;
++}
++
++static void hdr_rgb_to_yuv(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path, u32 n)
++{
++	struct img_ipi_frameparam *param = task->cfg.param;
++	struct img_image_buffer *src_buf = &param->inputs[0].buffer;
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_3x3_COEF_00, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_B_CHANNEL_NR, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_A_LUMINANCE, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_LBOX_DET_1, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_CURSOR_COLOR, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_Y2R_09, 0, BIT(0) | BIT(1));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TONE_MAP_TOP, 0, BIT(0));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_HLG_SG, 0,
++				  MDP_HDR_HLG_SG_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_L_MIX_0, 0, BIT(0));
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_00, 0x16E306CE,
++				  MDP_HDR_R2Y_00_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_01, 0xFC55024F,
++				  MDP_HDR_R2Y_01_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_02, 0x1000F3AB,
++				  MDP_HDR_R2Y_02_MASK);
++	if (src_buf->format.ycbcr_prof == MDP_YCBCR_PROFILE_BT709) {
++		cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_03,
++					  0xF1771000, MDP_HDR_R2Y_03_MASK);
++		cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_04,
++					  0xFE81, MDP_HDR_R2Y_04_MASK);
++	} else {
++		cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_03,
++					  0xF1781000, MDP_HDR_R2Y_03_MASK);
++		cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_04,
++					  0xFE88, MDP_HDR_R2Y_04_MASK);
++	}
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_05, 0,
++				  MDP_HDR_R2Y_05_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_06, 0,
++				  MDP_HDR_R2Y_06_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_07, 0,
++				  MDP_HDR_R2Y_07_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_08, 0x200,
++				  MDP_HDR_R2Y_08_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_R2Y_09, 0x9,
++				  MDP_HDR_R2Y_09_MASK);
++}
++
++static int hdr_config_frame(struct mdp_alg_task *task,
++			    struct mdp_alg_path_tp *path, u32 n)
++{
++	struct hdr_frame_data *hdr_frm = hdr_frm_data(path, n);
++	struct img_ipi_frameparam *param = task->cfg.param;
++	struct img_image_buffer *src_buf = &param->inputs[0].buffer;
++	struct img_image_buffer *dst_buf = &param->outputs[0].buffer;
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	u32 src_fmt = src_buf->format.colorformat;
++	u32 dst_fmt = dst_buf->format.colorformat;
++
++	if (MDP_COLOR_IS_10BIT_PACKED(src_fmt) ||
++	    MDP_COLOR_IS_10BIT_PACKED(dst_fmt))
++		hdr_frm->hdr_top |= (3 << 28);
++	else
++		hdr_frm->hdr_top |= (1 << 28);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TOP,
++				  hdr_frm->hdr_top, 0x3F0F0000);
++
++	/* Relay mode */
++	if (hdr_frm->relay) {
++		cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_RELAY,
++					  BIT(0), BIT(0));
++		return 0;
++	}
++
++	if (!MDP_COLOR_IS_YUV(src_fmt))
++		hdr_rgb_to_yuv(task, path, n);
++
++	return 0;
++}
++
++static int hdr_config_tile(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path,
++			   u32 n, u32 t)
++{
++	struct hdr_frame_data *hdr_frm = hdr_frm_data(path, n);
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	u16 tile_cnt = cfg->tile[path->path_id]->tile_cnt;
++	u32 hdr_hsize, hdr_vsize;
++	u32 hdr_out_start_x, hdr_out_start_y;
++	u32 hdr_out_end_x, hdr_out_end_y;
++	u32 hdr_first_tile;
++	u32 hdr_last_tile;
++	u32 reg;
++
++	reg = (tile->out.ys << 16) + tile->out.xs;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TILE_POS, reg,
++				  MDP_HDR_TILE_POS_MASK);
++
++	hdr_hsize = tile->in.xe - tile->in.xs + 1;
++	hdr_vsize = tile->in.ye - tile->in.ys + 1;
++	reg = (hdr_vsize << 16) + hdr_hsize;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_SIZE_0, reg, 0x1FFF1FFF);
++
++	hdr_out_start_x = tile->out.xs - tile->in.xs;
++	hdr_out_end_x =  tile->out.xe - tile->in.xs;
++	hdr_out_start_y = tile->out.ys - tile->in.ys;
++	hdr_out_end_y = tile->in.ye - tile->in.ys;
++
++	reg = (hdr_out_end_x << 16) + hdr_out_start_x;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_SIZE_1, reg, 0x1FFF1FFF);
++	reg = (hdr_out_end_y << 16) + hdr_out_start_y;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_SIZE_2, reg, 0x1FFF1FFF);
++
++	reg = tile->out.xs - tile->in.xs;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_HIST_CTRL_0, reg,
++				  0x00003FFF);
++
++	reg = tile->out.xe - tile->in.xs;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_HIST_CTRL_1, reg,
++				  0x00003FFF);
++
++	/* for n+1 tile*/
++	if (tile_cnt == 1) {
++		hdr_first_tile = 1;
++		hdr_last_tile = 1;
++	} else if (!t) {
++		hdr_first_tile = 1;
++		hdr_last_tile = 0;
++	} else if (t + 1 >= tile_cnt) {
++		hdr_first_tile = 0;
++		hdr_last_tile = 1;
++	} else {
++		hdr_first_tile = 0;
++		hdr_last_tile = 0;
++	}
++
++	reg = (hdr_first_tile << 5) | (hdr_last_tile << 6);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_TOP, reg,
++				  BIT(6) | BIT(5));
++
++	reg = hdr_first_tile << 9;
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HDR_HIST_ADDR, reg,
++				  BIT(9) | BIT(8));
++
++	return 0;
++}
++
++static int hdr_tile_prepare(struct mdp_alg_task *task,
++			    struct mdp_alg_path_tp *path,
++			    u32 n,
++			    struct tile_func_block *func,
++			    union mdl_alg_tile_data *data)
++{
++	struct hdr_frame_data *hdr_frm = hdr_frm_data(path, n);
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	const struct hdr_data *hdr = get_private_data(task, path, n);
++
++	func->for_func = tile_crop_for;
++	func->enable_flag = !hdr_frm->relay;
++
++	func->full_size_x_in = cfg->frame_tile_sz.width;
++	func->full_size_y_in = cfg->frame_tile_sz.height;
++	func->full_size_x_out = func->full_size_x_in;
++	func->full_size_y_out = func->full_size_y_in;
++
++	func->in_tile_width = 8191;
++	func->out_tile_width = 8191;
++	func->in_tile_height = 65535;
++	func->out_tile_height = 65535;
++
++	if (!hdr_frm->relay || cfg->param->num_outputs > 1) {
++		func->type |= TILE_TYPE_CROP_EN;
++		if (hdr->tile_loss) {
++			func->l_tile_loss = hdr->tile_loss;
++			func->r_tile_loss = hdr->tile_loss;
++		}
++		func->in_min_width = hdr->min_tile_width;
++	}
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_hdr = {
++	.comp_prepare = hdr_prepare,
++	.comp_init = hdr_config_init,
++	.config_frame = hdr_config_frame,
++	.config_tile = hdr_config_tile,
++	.tile_prepare = hdr_tile_prepare,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_ovl.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_ovl.c
+new file mode 100644
+index 000000000000..abe9f6740879
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_ovl.c
+@@ -0,0 +1,64 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_ovl.h"
++#include "mdp_tile_core.h"
++#include "mtk-mdp3-alg.h"
++
++static int ovl_config_init(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_EN, BIT(0),
++				  MDP_OVL_EN_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_SRC_CON, BIT(9),
++				  MDP_OVL_SRC_CON_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_DP_CON, BIT(0),
++				  MDP_OVL_DP_CON_MASK);
++
++	return 0;
++}
++
++static int ovl_config_frame(struct mdp_alg_task *task,
++			    struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_L0_CON,
++				  BIT(29) | BIT(28), BIT(29) | BIT(28));
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_SRC_CON,
++				  BIT(0), BIT(0));
++
++	return 0;
++}
++
++static int ovl_config_tile(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path,
++			   u32 n, u32 t)
++{
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 width = tile->in.xe - tile->in.xs + 1;
++	u32 height = tile->in.ye - tile->in.ys + 1;
++	u32 reg = (height << 16) + width;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_L0_SRC_SIZE,
++				  reg, MDP_OVL_L0_SRC_SIZE_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_OVL_ROI_SIZE,
++				  reg, MDP_OVL_ROI_SIZE_MASK);
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_ovl = {
++	.comp_init = ovl_config_init,
++	.config_frame = ovl_config_frame,
++	.config_tile = ovl_config_tile,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_pad.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_pad.c
+new file mode 100644
+index 000000000000..6f79154d8b47
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_pad.c
+@@ -0,0 +1,48 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_pad.h"
++#include "mdp_tile_core.h"
++#include "mtk-mdp3-alg.h"
++
++static int pad_config_init(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_PAD_CON, BIT(1),
++				  MDP_PAD_CON_MASK);
++	/* Reset */
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_PAD_W_SIZE, 0,
++				  MDP_PAD_W_SIZE_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_PAD_H_SIZE, 0,
++				  MDP_PAD_H_SIZE_MASK);
++
++	return 0;
++}
++
++static int pad_config_tile(struct mdp_alg_task *task,
++			   struct mdp_alg_path_tp *path,
++			   u32 n, u32 t)
++{
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 width = tile->in.xe - tile->in.xs + 1;
++	u32 height = tile->in.ye - tile->in.ys + 1;
++	u32 reg = ((height - 1) << 16) + width;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_PAD_PIC_SIZE, reg,
++				  MDP_PAD_PIC_SIZE_MASK);
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_pad = {
++	.comp_init = pad_config_init,
++	.config_tile = pad_config_tile,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c
+new file mode 100644
+index 000000000000..19a2cbc3a22f
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_split.c
+@@ -0,0 +1,314 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_split.h"
++#include "mdp_tile_core.h"
++#include "mdp_tile_comp.h"
++#include "mtk-mdp3-alg.h"
++#include "mtk-mdp3-core.h"
++
++enum SPLIT_SWAP_MATRIX {
++	SPLIT_SWAP_NONE = 0,
++	SPLIT_SWAP_RG = 1,	/* {R,G,B} -> {G,R,B} */
++	SPLIT_SWAP_GP = 2,	/* {R,G,B} -> {R,B,G} */
++	SPLIT_SWAP_BR = 4,	/* {R,G,B} -> {B,G,R} */
++	SPLIT_SWAP_RG_GB = 8,	/* {R,G,B} -> {B,R,G} */
++	SPLIT_SWAP_RB_GB = 16,	/* {R,G,B} -> {G,B,R} */
++};
++
++enum SPLIT_OUT_PORT {
++	SPLIT_OUT_0,
++	SPLIT_OUT_1,
++	SPLIT_OUT_DUAL,
++	SPLIT_OUT_NONE,
++};
++
++struct split_frame_data {
++	u32 muxSel;
++	u32 srcSel;
++	u32 splitOff0;
++	u32 splitOff1;
++	u32 splitRoi0;
++	u32 splitRoi1;
++	bool enHdmi;
++	bool enOut0;
++	bool enOut1;
++	bool enSram0;
++	bool enSram1;
++	bool invVsyncHdmi;
++	bool invVsyncDgi;
++	bool invHsyncHdmi;
++	bool invHsyncDgi;
++	bool toYuv444;
++};
++
++struct split_data {
++	u32 tile_width;
++};
++
++static const struct split_data mt8195_split_data = {
++	.tile_width = 976 * 2,
++};
++
++static inline struct split_frame_data *split_frm_data(struct mdp_alg_path_tp *path,
++						      u32 n)
++{
++	return path->nodes[n].data;
++}
++
++static inline const struct split_data *get_private_data(struct mdp_alg_task *task,
++							struct mdp_alg_path_tp *path,
++							u32 n)
++{
++	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8195:
++		return &mt8195_split_data;
++	default:
++		return 0;
++	}
++}
++
++static int split_prepare(struct mdp_alg_task *task,
++			 struct mdp_alg_path_tp *path, u32 n)
++{
++	struct split_frame_data *split_frm;
++
++	split_frm = kzalloc(sizeof(*split_frm), GFP_KERNEL);
++	if (!split_frm)
++		return -ENOMEM;
++	path->nodes[n].data = (void *)split_frm;
++
++	return 0;
++}
++
++static int split_config_init(struct mdp_alg_task *task,
++			     struct mdp_alg_path_tp *path, u32 n)
++{
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	mtk_mmsys_vpp_split_out_config(task->mdp->mm_subsys[MDP_MM_SUBSYS_1].mmsys,
++				       pkt);
++
++	return 0;
++}
++
++static int split_config_frame(struct mdp_alg_task *task,
++			      struct mdp_alg_path_tp *path, u32 n)
++{
++	struct split_frame_data *split_frm = split_frm_data(path, n);
++	struct mdp_alg_path_node *node = &path->nodes[n];
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	struct img_image_buffer *src_buf = &task->cfg.param->inputs[0].buffer;
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	u32 hdmi_out = SPLIT_OUT_NONE;
++	u32 in_w, in_h;
++	u32 reg;
++
++	in_w = cfg->frame_tile_sz.width;
++	in_h = cfg->frame_tile_sz.height;
++
++	if (task->cfg.dual) {
++		hdmi_out = SPLIT_OUT_DUAL;
++	} else {
++		if (node->id == MDP_COMP_SPLIT)
++			hdmi_out = SPLIT_OUT_0;
++		else
++			hdmi_out = SPLIT_OUT_1;
++	}
++
++	switch (hdmi_out) {
++	case SPLIT_OUT_0:
++		split_frm->enHdmi = true;
++		split_frm->enOut0 = true;
++		split_frm->enSram0 = true;
++		/* D1A1 */
++		split_frm->muxSel = 0x00001001;
++		split_frm->srcSel = 0x00000000;
++		break;
++	case SPLIT_OUT_1:
++		split_frm->enHdmi = true;
++		split_frm->enOut1 = true;
++		split_frm->enSram0 = true;
++		split_frm->enSram1 = true;
++		/* G1F1E2D1A1 */
++		split_frm->muxSel = 0x01121001;
++		/* sram0 , sram1 & out1 src from hdmi */
++		split_frm->srcSel = 0x00000000;
++		break;
++	case SPLIT_OUT_DUAL:
++		split_frm->enHdmi = true;
++		split_frm->enOut0 = true;
++		split_frm->enOut1 = true;
++		split_frm->enSram0 = true;
++		split_frm->enSram1 = true;
++		/* H0G1F0E0D0C0B0A0 */
++		split_frm->muxSel = 0x01000000;
++		/* sram0 , sram1 & out1 src from hdmi */
++		split_frm->srcSel = 0x00000000;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if (split_frm->enHdmi) {
++		reg = in_h << 16 | in_w << 0;
++		cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_0, reg,
++					  VPP_SPLIT_CFG_0_MASK);
++
++		reg = split_frm->enHdmi << 0 | split_frm->invVsyncHdmi << 4 |
++			split_frm->invHsyncHdmi << 8 | split_frm->toYuv444 << 16;
++		cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_4, reg,
++					  VPP_SPLIT_CFG_4_MASK);
++	}
++
++	if (task->cfg.dual) {
++		reg = in_h << 16 | in_w << 0;
++		cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_36, reg,
++					  VPP_SPLIT_CFG_36_MASK);
++	}
++
++	if (MDP_COLOR_IS_YUV(src_buf->format.colorformat))
++		reg = SPLIT_SWAP_RB_GB;
++	else
++		reg = SPLIT_SWAP_NONE;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_12, reg,
++				  VPP_SPLIT_CFG_12_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_40, BIT(0),
++				  VPP_SPLIT_CFG_40_MASK);
++
++	return 0;
++}
++
++static int split_config_tile(struct mdp_alg_task *task,
++			     struct mdp_alg_path_tp *path,
++			     u32 n, u32 t)
++{
++	struct split_frame_data *split_frm = split_frm_data(path, n);
++	struct mdp_alg_path_node *node = &path->nodes[n];
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 in_w, in_h;
++	u32 out_w, out_h;
++	u32 reg;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_6,
++				  split_frm->enOut0, VPP_SPLIT_CFG_6_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_7,
++				  split_frm->enOut1, VPP_SPLIT_CFG_7_MASK);
++
++	in_w = tile->in.xe - tile->in.xs + 1;
++	in_h = tile->in.ye - tile->in.ys + 1;
++	out_w = tile->out.xe - tile->out.xs + 1;
++	out_h = tile->out.ye - tile->out.ys + 1;
++
++	if (task->cfg.dual) {
++		if (node->id == MDP_COMP_SPLIT) {
++			split_frm->splitOff0 = 0;
++			split_frm->splitRoi0 = out_w;
++			reg = out_h << 16 | split_frm->splitRoi0;
++
++			if (split_frm->enOut0)
++				cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_2,
++							  reg, VPP_SPLIT_CFG_2_MASK);
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_8,
++						  reg, VPP_SPLIT_CFG_8_MASK);
++
++			reg = split_frm->splitOff0 << 16 | split_frm->splitRoi0;
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_37,
++						  reg, VPP_SPLIT_CFG_37_MASK);
++		} else {
++			split_frm->splitOff1 = cfg->frame_in.width - out_w;
++			split_frm->splitRoi1 = out_w;
++			reg = out_h << 16 | split_frm->splitRoi1;
++
++			if (split_frm->enOut1)
++				cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_3,
++							  reg, VPP_SPLIT_CFG_3_MASK);
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_9,
++						  reg, VPP_SPLIT_CFG_9_MASK);
++
++			reg = split_frm->splitOff1 << 16 | split_frm->splitRoi1;
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_38,
++						  reg, VPP_SPLIT_CFG_38_MASK);
++		}
++	} else {
++		reg = in_h << 16 | in_w;
++		if (split_frm->enOut0)
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_2,
++						  reg, VPP_SPLIT_CFG_2_MASK);
++		if (split_frm->enOut1)
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_3,
++						  reg, VPP_SPLIT_CFG_3_MASK);
++
++		reg = out_h << 16 | out_w;
++		if (split_frm->enSram0)
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_8,
++						  reg, VPP_SPLIT_CFG_8_MASK);
++		if (split_frm->enSram1)
++			cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_9,
++						  reg, VPP_SPLIT_CFG_9_MASK);
++	}
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_16,
++				  split_frm->muxSel, VPP_SPLIT_CFG_16_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_CFG_17,
++				  split_frm->srcSel, VPP_SPLIT_CFG_17_MASK);
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + VPP_SPLIT_ENABLE, BIT(0),
++				  VPP_SPLIT_ENABLE_MASK);
++
++	return 0;
++}
++
++static int split_tile_prepare(struct mdp_alg_task *task,
++			      struct mdp_alg_path_tp *path,
++			      u32 n,
++			      struct tile_func_block *func,
++			      union mdl_alg_tile_data *data)
++{
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	const struct split_data *split = get_private_data(task, path, n);
++	struct img_ipi_frameparam *param = task->cfg.param;
++	struct img_image_buffer *src_buf = &param->inputs[0].buffer;
++	u32 src_fmt = src_buf->format.colorformat;
++
++	data->split.src_fmt = src_fmt;
++	data->split.crop_offset_x = cfg->frame_in_crop[0].left;
++	data->split.crop_offset_y = cfg->frame_in_crop[0].top;
++	data->split.crop_width   = cfg->frame_in_crop[0].width;
++	data->split.crop_height  = cfg->frame_in_crop[0].height;
++
++	func->type = TILE_TYPE_RDMA | TILE_TYPE_CROP_EN;
++	func->init_func = tile_split_init;
++	func->for_func = tile_split_for;
++	func->back_func = tile_split_back;
++	func->data = data;
++	func->enable_flag = true;
++
++	func->full_size_x_in = cfg->frame_tile_sz.width;
++	func->full_size_y_in = cfg->frame_tile_sz.height;
++	func->full_size_x_out = func->full_size_x_in;
++	func->full_size_y_out = func->full_size_y_in;
++
++	func->in_tile_width = split->tile_width;
++	func->in_tile_height = 65535;
++	func->out_tile_height = 65535;
++	func->in_const_x = 2;
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_split = {
++	.comp_prepare = split_prepare,
++	.comp_init = split_config_init,
++	.config_frame = split_config_frame,
++	.config_tile = split_config_tile,
++	.tile_prepare = split_tile_prepare,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c
+new file mode 100644
+index 000000000000..11192e21b2c7
+--- /dev/null
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tdshp.c
+@@ -0,0 +1,214 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (c) 2026 MediaTek Inc.
++ * Author: Dennis-YC Hsieh <dennis-yc.hsieh@mediatek.com>
++ */
++
++#include "mdp_reg_tdshp.h"
++#include "mdp_tile_core.h"
++#include "mdp_tile_comp.h"
++#include "mtk-mdp3-alg.h"
++#include "mtk-mdp3-core.h"
++
++struct tdshp_data {
++	u32 tile_width;
++	bool wrot_pending;
++	bool relay_mode;
++};
++
++static const struct tdshp_data mt8195_tdshp_main_data = {
++	.tile_width = 1936,
++	.relay_mode = true,
++};
++
++static const struct tdshp_data mt8195_tdshp_sub_data = {
++	.tile_width = 544,
++	.relay_mode = true,
++};
++
++struct tdshp_frame_data {
++	u32 out_hist_xs;
++	u32 out_hist_ys;
++	u32 cut_pos_x;
++};
++
++static inline struct tdshp_frame_data *tdshp_frm_data(struct mdp_alg_path_tp *path,
++						      u32 n)
++{
++	return path->nodes[n].data;
++}
++
++static inline const struct tdshp_data *get_private_data(struct mdp_alg_task *task,
++							struct mdp_alg_path_tp *path,
++							u32 n)
++{
++	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8195:
++		if (path->nodes[n].id == MDP_COMP_TDSHP2 ||
++		    path->nodes[n].id == MDP_COMP_TDSHP3)
++			return &mt8195_tdshp_main_data;
++		else
++			return &mt8195_tdshp_sub_data;
++	default:
++		return 0;
++	}
++}
++
++static int tdshp_prepare(struct mdp_alg_task *task,
++			 struct mdp_alg_path_tp *path, u32 n)
++{
++	struct tdshp_frame_data *tdshp_frm;
++
++	tdshp_frm = kzalloc(sizeof(*tdshp_frm), GFP_KERNEL);
++	if (!tdshp_frm)
++		return -ENOMEM;
++	path->nodes[n].data = (void *)tdshp_frm;
++
++	return 0;
++}
++
++static int tdshp_config_init(struct mdp_alg_task *task,
++			     struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TDSHP_CTRL, BIT(0), BIT(0));
++	/* Enable FIFO */
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TDSHP_CFG, BIT(1), BIT(1));
++
++	return 0;
++}
++
++static int tdshp_config_frame(struct mdp_alg_task *task,
++			      struct mdp_alg_path_tp *path, u32 n)
++{
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TDSHP_CFG, BIT(0), BIT(0));
++
++	return 0;
++}
++
++static int tdshp_config_tile(struct mdp_alg_task *task,
++			     struct mdp_alg_path_tp *path,
++			     u32 n, u32 t)
++{
++	struct mdp_alg_tile_engine *tile = config_get_tile(task, path, n, t);
++	struct tdshp_frame_data *tdshp_frm = tdshp_frm_data(path, n);
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	struct mdp_alg_path_node *node = &path->nodes[n];
++	const struct img_crop *crop = &cfg->frame_in_crop[node->out_idx];
++	struct cmdq_pkt *pkt = task->pkts[path->path_id];
++	const phys_addr_t base_pa = path->nodes[n].comp->reg_base;
++	u32 tdshp_input_w, tdshp_input_h;
++	u32 tdshp_output_w, tdshp_output_h;
++	u32 tdshp_crop_x_offset, tdshp_crop_y_offset;
++	u32 tdshp_hist_left_start, tdshp_hist_top_start;
++	u32 hist_win_x_start, hist_win_x_end;
++	u32 hist_win_y_start, hist_win_y_end;
++	u8 tile_cnt = cfg->tile[path->path_id]->tile_cnt;
++
++	tdshp_input_w = tile->in.xe - tile->in.xs + 1;
++	tdshp_input_h = tile->in.ye - tile->in.ys + 1;
++	tdshp_output_w = tile->out.xe - tile->out.xs + 1;
++	tdshp_output_h = tile->out.ye - tile->out.ys + 1;
++	tdshp_crop_x_offset = tile->out.xs - tile->in.xs;
++	tdshp_crop_y_offset = tile->out.ys - tile->in.ys;
++
++	if (!t) {
++		if (cfg->dual)
++			tdshp_frm->cut_pos_x = crop->width / 2;
++		else
++			tdshp_frm->cut_pos_x = crop->width;
++
++		if (node->out_idx)
++			tdshp_frm->out_hist_xs = tdshp_frm->cut_pos_x;
++	}
++
++	tdshp_frm->out_hist_ys = t ? (tile->out.ye + 1) : 0;
++
++	tdshp_hist_left_start = (tile->out.xs > tdshp_frm->out_hist_xs) ?
++				tile->out.xs : tdshp_frm->out_hist_xs;
++	tdshp_hist_top_start = (tile->out.ys > tdshp_frm->out_hist_ys) ?
++				tile->out.ys : tdshp_frm->out_hist_ys;
++
++	hist_win_x_start = tdshp_hist_left_start - tile->in.xs;
++	if (cfg->dual && !node->out_idx && (t + 1 >= tile_cnt))
++		hist_win_x_end = tdshp_frm->cut_pos_x - tile->in.xs - 1;
++	else
++		hist_win_x_end = tile->out.xe - tile->in.xs;
++
++	hist_win_y_start = tdshp_hist_top_start - tile->in.ys;
++	hist_win_y_end = tile->out.xe - tile->in.xs;
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TDSHP_INPUT_SIZE,
++				  (tdshp_input_w << 16) + tdshp_input_h,
++				  MDP_TDSHP_INPUT_SIZE_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TDSHP_OUTPUT_OFFSET,
++				  (tdshp_crop_x_offset << 16) + tdshp_crop_y_offset,
++				  MDP_TDSHP_OUTPUT_OFFSET_MASK);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_TDSHP_OUTPUT_SIZE,
++				  (tdshp_output_w << 16) + tdshp_output_h,
++				  MDP_TDSHP_OUTPUT_SIZE_MASK);
++
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HIST_CFG_00,
++				  (hist_win_x_end << 16) | hist_win_x_start,
++				  U32_MAX);
++	cmdq_pkt_write_value_addr(pkt, base_pa + MDP_HIST_CFG_01,
++				  (hist_win_y_end << 16) | hist_win_y_start,
++				  U32_MAX);
++
++	return 0;
++}
++
++static int tdshp_tile_prepare(struct mdp_alg_task *task,
++			      struct mdp_alg_path_tp *path,
++			      u32 n,
++			      struct tile_func_block *func,
++			      union mdl_alg_tile_data *data)
++{
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	const struct tdshp_data *tdshp = get_private_data(task, path, n);
++	struct mdp_alg_path_node *node = &path->nodes[n];
++	struct img_ipi_frameparam *p = task->cfg.param;
++	struct img_image_buffer *dst_buf = &p->outputs[node->out_idx].buffer;
++	const struct img_frame *frame_out = &cfg->frame_out[node->out_idx];
++	const u8 rotate = cfg->out_rotate[node->out_idx];
++
++	data->tdshp.relay_mode = tdshp->relay_mode;
++	data->tdshp.max_width = tdshp->tile_width;
++
++	func->type = TILE_TYPE_CROP_EN;
++	func->init_func = tile_tdshp_init;
++	func->for_func = tile_crop_for;
++	func->data = data;
++	func->enable_flag = !tdshp->relay_mode;
++	if (tdshp->wrot_pending) {
++		func->full_size_x_in = frame_out->width;
++		func->full_size_y_in = frame_out->height;
++		func->full_size_x_out = frame_out->width;
++		func->full_size_y_out = frame_out->height;
++	} else if (rotate == ROT_90 || rotate == ROT_270) {
++		func->full_size_x_in = dst_buf->format.height;
++		func->full_size_y_in = dst_buf->format.width;
++		func->full_size_x_out = dst_buf->format.height;
++		func->full_size_y_out = dst_buf->format.width;
++	} else {
++		func->full_size_x_in = dst_buf->format.width;
++		func->full_size_y_in = dst_buf->format.height;
++		func->full_size_x_out = dst_buf->format.width;
++		func->full_size_y_out = dst_buf->format.height;
++	}
++
++	return 0;
++}
++
++const struct mdp_alg_comp_ops alg_ops_tdshp = {
++	.comp_prepare = tdshp_prepare,
++	.comp_init = tdshp_config_init,
++	.config_frame = tdshp_config_frame,
++	.config_tile = tdshp_config_tile,
++	.tile_prepare = tdshp_tile_prepare,
++};
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.c b/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.c
+index c1f4bbabddc4..8d4acc9f1a65 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.c
+@@ -76,6 +76,19 @@ enum mdp_tile_msg tile_rdma_init(struct tile_func_block *func,
+ 	return T_OK;
+ }
+ 
++enum mdp_tile_msg tile_split_init(struct tile_func_block *func,
++				  struct tile_reg_map *reg_map)
++{
++	struct tile_data_rdma *data = &func->data->rdma;
++
++	if (unlikely(!data))
++		return M_NULL_DATA;
++
++	reg_map->tdr_ctrl_en = true;
++
++	return T_OK;
++}
++
+ enum mdp_tile_msg tile_prz_init(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map)
+ {
+@@ -273,6 +286,52 @@ enum mdp_tile_msg tile_rdma_for(struct tile_func_block *func,
+ 	return T_OK;
+ }
+ 
++enum mdp_tile_msg tile_split_for(struct tile_func_block *func,
++				 struct tile_reg_map *reg_map)
++{
++	if (!reg_map->skip_x_cal && !func->tdr_h_disable_flag) {
++		if (func->out_cal_order & TILE_ORDER_RIGHT_TO_LEFT) {
++			if (func->backward_output_xe_pos < func->out_pos_xe)
++				func->out_pos_xe = func->backward_output_xe_pos;
++
++			if (func->out_pos_xs < func->backward_output_xs_pos) {
++				func->bias_x = func->backward_output_xs_pos - func->out_pos_xs;
++				func->out_pos_xs = func->backward_output_xs_pos;
++			} else {
++				func->bias_x = 0;
++			}
++		} else {
++			if (func->backward_output_xs_pos >= func->out_pos_xs) {
++				func->bias_x = func->backward_output_xs_pos - func->out_pos_xs;
++				func->out_pos_xs = func->backward_output_xs_pos;
++			}
++
++			if (func->in_pos_xe < func->backward_output_xe_pos)
++				func->out_pos_xe = func->in_pos_xe;
++			else
++				func->out_pos_xe = func->backward_output_xe_pos;
++		}
++	}
++
++	if (!reg_map->skip_y_cal && !func->tdr_v_disable_flag) {
++		if (func->backward_output_ys_pos >= func->out_pos_ys) {
++			func->bias_y = func->backward_output_ys_pos - func->out_pos_ys;
++			func->out_pos_ys = func->backward_output_ys_pos;
++		}
++
++		if (func->in_pos_ye < func->backward_output_ye_pos)
++			func->out_pos_ye = func->in_pos_ye;
++		else
++			func->out_pos_ye = func->backward_output_ye_pos;
++	}
++
++	/* skip frame mode */
++	if (reg_map->first_frame)
++		return T_OK;
++
++	return T_OK;
++}
++
+ enum mdp_tile_msg tile_crop_for(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map)
+ {
+@@ -809,6 +868,63 @@ enum mdp_tile_msg tile_rdma_back(struct tile_func_block *func,
+ 	return T_OK;
+ }
+ 
++enum mdp_tile_msg tile_split_back(struct tile_func_block *func,
++				  struct tile_reg_map *reg_map)
++{
++	struct tile_data_split *data = &func->data->split;
++	u32 remain;
++
++	if (unlikely(!data))
++		return M_NULL_DATA;
++
++	if (reg_map->first_frame) {
++		/* Specific handle for block and ring buffer mode */
++		if ((func->in_pos_xe + 1) > (int)(data->crop_offset_x + data->crop_width))
++			func->in_pos_xe = data->crop_offset_x + data->crop_width - 1;
++
++		if (func->in_const_x != 1) {
++			remain = TILE_MOD(func->in_pos_xe + 1, func->in_const_x);
++			if (remain)
++				func->in_pos_xe += remain;
++		}
++
++		if ((func->in_pos_ye + 1) > (int)(data->crop_offset_y + data->crop_height))
++			func->in_pos_ye = data->crop_offset_y + data->crop_height - 1;
++
++		if (func->in_const_y != 1) {
++			remain = TILE_MOD(func->in_pos_ye + 1, func->in_const_y);
++			if (remain)
++				func->in_pos_ye += remain;
++		}
++		return T_OK;
++	}
++
++	/* Specific handle for block and ring buffer mode */
++	if (!reg_map->skip_x_cal && !func->tdr_h_disable_flag) {
++		if ((func->in_pos_xe + 1) > (int)(data->crop_offset_x + data->crop_width))
++			func->in_pos_xe = data->crop_offset_x + data->crop_width - 1;
++
++		if (func->in_const_x != 1) {
++			remain = TILE_MOD(func->in_pos_xe + 1, func->in_const_x);
++			if (remain)
++				func->in_pos_xe += remain;
++		}
++	}
++
++	if (!reg_map->skip_y_cal && !func->tdr_v_disable_flag) {
++		if ((func->in_pos_ye + 1) > (int)(data->crop_offset_y + data->crop_height))
++			func->in_pos_ye = data->crop_offset_y + data->crop_height - 1;
++
++		if (func->in_const_y != 1) {
++			remain = TILE_MOD(func->in_pos_ye + 1, func->in_const_y);
++			if (remain)
++				func->in_pos_ye += remain;
++		}
++	}
++
++	return T_OK;
++}
++
+ enum mdp_tile_msg tile_prz_back(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map)
+ {
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.h b/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.h
+index a0045f84901c..6f6c921c896d 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.h
++++ b/drivers/media/platform/mediatek/mdp3/mdp_tile_comp.h
+@@ -10,6 +10,8 @@
+ /* prototype init */
+ enum mdp_tile_msg tile_rdma_init(struct tile_func_block *func,
+ 				 struct tile_reg_map *reg_map);
++enum mdp_tile_msg tile_split_init(struct tile_func_block *func,
++				  struct tile_reg_map *reg_map);
+ enum mdp_tile_msg tile_prz_init(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map);
+ enum mdp_tile_msg tile_tdshp_init(struct tile_func_block *func,
+@@ -19,6 +21,8 @@ enum mdp_tile_msg tile_wrot_init(struct tile_func_block *func,
+ /* prototype for */
+ enum mdp_tile_msg tile_rdma_for(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map);
++enum mdp_tile_msg tile_split_for(struct tile_func_block *func,
++				 struct tile_reg_map *reg_map);
+ enum mdp_tile_msg tile_crop_for(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map);
+ enum mdp_tile_msg tile_aal_for(struct tile_func_block *func,
+@@ -30,6 +34,8 @@ enum mdp_tile_msg tile_wrot_for(struct tile_func_block *func,
+ /* prototype back */
+ enum mdp_tile_msg tile_rdma_back(struct tile_func_block *func,
+ 				 struct tile_reg_map *reg_map);
++enum mdp_tile_msg tile_split_back(struct tile_func_block *func,
++				  struct tile_reg_map *reg_map);
+ enum mdp_tile_msg tile_prz_back(struct tile_func_block *func,
+ 				struct tile_reg_map *reg_map);
+ enum mdp_tile_msg tile_wrot_back(struct tile_func_block *func,
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+index a45674fba1db..fcb1d196865d 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+@@ -139,6 +139,14 @@ struct tile_data_rdma {
+ 	u16 read_rotate;
+ };
+ 
++struct tile_data_split {
++	enum mdp_color src_fmt;
++	u32 crop_offset_x;
++	u32 crop_offset_y;
++	u32 crop_width;
++	u32 crop_height;
++};
++
+ struct tile_data_rsz {
+ 	bool use_121filter;
+ 	u32 coeff_step_x;
+@@ -186,6 +194,7 @@ struct tile_data_wrot {
+ 
+ union mdl_alg_tile_data {
+ 	struct tile_data_rdma rdma;
++	struct tile_data_split split;
+ 	struct tile_data_rsz rsz;
+ 	struct tile_data_tdshp tdshp;
+ 	struct tile_data_wrot wrot;
+@@ -252,8 +261,16 @@ struct mdp_alg_comp_ops {
+ };
+ 
+ extern const struct mdp_alg_comp_ops *mdp_alg_ops[MDP_COMP_TYPE_COUNT];
++extern const struct mdp_alg_comp_ops alg_ops_aal;
++extern const struct mdp_alg_comp_ops alg_ops_color;
++extern const struct mdp_alg_comp_ops alg_ops_fg;
++extern const struct mdp_alg_comp_ops alg_ops_hdr;
++extern const struct mdp_alg_comp_ops alg_ops_ovl;
++extern const struct mdp_alg_comp_ops alg_ops_pad;
+ extern const struct mdp_alg_comp_ops alg_ops_rdma;
+ extern const struct mdp_alg_comp_ops alg_ops_rsz;
++extern const struct mdp_alg_comp_ops alg_ops_split;
++extern const struct mdp_alg_comp_ops alg_ops_tdshp;
+ extern const struct mdp_alg_comp_ops alg_ops_wrot;
+ 
+ static inline struct mdp_alg_tile_engine *config_get_tile(struct mdp_alg_task *task,
+-- 
+2.45.2
+

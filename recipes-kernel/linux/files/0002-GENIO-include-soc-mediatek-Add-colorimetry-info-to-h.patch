@@ -1,0 +1,86 @@
+From c1e26cb1539fa59ee5f47f30cdd54d7a1556ac2f Mon Sep 17 00:00:00 2001
+From: Macross Chen <macross.chen@mediatek.com>
+Date: Mon, 16 Mar 2026 17:00:51 +0800
+Subject: [PATCH 2/3] GENIO: include: soc: mediatek: Add colorimetry info to
+ hdmirx interface
+
+This update adds deep color and colorimetry information as defined
+in the AVI InfoFrame, in accordance with CTA-861-I FINAL 3.
+The deep color and colorimetry details are provided through AVI
+InfoFrame metadata.
+
+The supported color depths in mdp-capture are 8-bit, 10-bit, and
+12-bit.
+The supported color transformations in mdp-capture are BT.601,
+BT.709, and BT.2020.
+
+For unsupported colorimetries, the closest possible transformation
+will be applied.
+
+Change-Id: I3cdc55a481a999a38789a572a7266f40c403557a
+Signed-off-by: Macross Chen <macross.chen@mediatek.com>
+---
+ include/linux/soc/mediatek/mtk-hdmirx-intf.h | 35 ++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/include/linux/soc/mediatek/mtk-hdmirx-intf.h b/include/linux/soc/mediatek/mtk-hdmirx-intf.h
+index aa7261b96489..41db3df3a0a2 100644
+--- a/include/linux/soc/mediatek/mtk-hdmirx-intf.h
++++ b/include/linux/soc/mediatek/mtk-hdmirx-intf.h
+@@ -17,11 +17,45 @@ enum hdmirx_intf_cs {
+ 	HDMIRX_INTF_CS_YUV420		/* YUV420 */
+ };
+ 
++/* deep color */
++enum hdmirx_intf_dp {
++	HDMIRX_INTF_BIT_DEPTH_8_BIT = 0,	/* total 24bits */
++	HDMIRX_INTF_BIT_DEPTH_10_BIT,		/* total 30bits  */
++	HDMIRX_INTF_BIT_DEPTH_12_BIT,		/* total 36bits  */
++	HDMIRX_INTF_BIT_DEPTH_16_BIT		/* total 48bits  */
++};
++
++/* colorimetry */
++enum hdmirx_intf_colorimetry {
++	HDMIRX_INTF_COLORIMETRY_SMPTE170 = 0,		/* SMPTE170 */
++	HDMIRX_INTF_COLORIMETRY_BT709,			/* BT709 */
++	HDMIRX_INTF_COLORIMETRY_XVYCC601,		/* xvYCC601 */
++	HDMIRX_INTF_COLORIMETRY_XVYCC709,		/* xvYCC709 */
++	HDMIRX_INTF_COLORIMETRY_SYCC601,		/* sYCC601 */
++	HDMIRX_INTF_COLORIMETRY_OPYCC601,		/* opYCC601 */
++	HDMIRX_INTF_COLORIMETRY_OPRGB,			/* opRGB */
++	HDMIRX_INTF_COLORIMETRY_BT2020_YCBCR,		/* BT2020, YCbcCrc */
++	HDMIRX_INTF_COLORIMETRY_BT2020_RGB_YCBCR,	/* BT2020, RGB or YCbCr */
++	HDMIRX_INTF_COLORIMETRY_SMPTE2113_P3D65,	/* SMPTE_2113_P3D65 */
++	HDMIRX_INTF_COLORIMETRY_SMPTE2113_P3DCI,	/* SMPTE_2113_P3DCI */
++	HDMIRX_INTF_COLORIMETRY_BT2100,			/* BT2100 */
++	HDMIRX_INTF_COLORIMETRY_SRGB,			/* sRGB */
++	HDMIRX_INTF_COLORIMETRY_DEFAULT_RGB,		/* defaultRGB */
++	HDMIRX_INTF_COLORIMETRY_UNKNOWN			/* unknown */
++};
++
++/* notify event */
++enum hdmirx_intf_notify {
++	HDMIRX_INTF_NOTIFY_COLORIMETRY_CHANGE,	/* AVI infoframe is changed */
++};
++
+ struct hdmirx_capture_interface {
+ 	unsigned int width;
+ 	unsigned int height;
+ 	unsigned int frame_rate;	/* Hz */
+ 	enum hdmirx_intf_cs color_space;
++	enum hdmirx_intf_dp deep_color;
++	enum hdmirx_intf_colorimetry colorimetry;
+ 
+ 	void *priv;
+ };
+@@ -29,6 +63,7 @@ struct hdmirx_capture_interface {
+ struct hdmirx_capture_ops {
+ 	int (*probe)(struct hdmirx_capture_interface *intf);
+ 	void (*disconnect)(struct hdmirx_capture_interface *intf);
++	int (*notify)(struct hdmirx_capture_interface *intf, enum hdmirx_intf_notify, void *data);
+ };
+ 
+ struct hdmirx_capture_driver {
+-- 
+2.45.2
+

@@ -1,0 +1,54 @@
+From 176add095d883bf5f90bb60b02d18b748b712a63 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Fri, 8 May 2026 10:03:46 +0800
+Subject: [PATCH 31/35] GENIO: media: platform: mtk-mdp3: fix use-after-free in
+ cmdq_release_work
+
+Fix use-after-free issue by moving path cleanup before task is freed.
+The path pointer references task memory, so accessing path->node_cnt
+after kfree(task) causes a use-after-free violation.
+
+Coverity issue:
+(156) Event USE_AFTER_FREE: Using freed pointer path at line 478.
+
+Fixed in:
+- cmdq_release_work: Move path node cleanup before task is freed
+
+Change-Id: Ibffc1be252bf1c1fb26c48d15f206d2f39c44108
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_alg_core.c | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+index 3669ad89e23d..fa303d29d4ac 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+@@ -468,6 +468,12 @@ static void cmdq_release_work(struct mdp_alg_cmdq *cmd)
+ 	kfree(cmd->comps);
+ 	cmd->comps = NULL;
+ 
++cmdq_send_done:
++	for (i = 0; i < path->node_cnt; i++) {
++		kfree(path->nodes[i].data);
++		path->nodes[i].data = NULL;
++	}
++
+ 	if (job_done) {
+ 		kfree(task->cfg.tile[path->path_id]);
+ 		task->cfg.tile[path->path_id] = NULL;
+@@ -475,11 +481,6 @@ static void cmdq_release_work(struct mdp_alg_cmdq *cmd)
+ 		task = NULL;
+ 	}
+ 
+-cmdq_send_done:
+-	for (i = 0; i < path->node_cnt; i++) {
+-		kfree(path->nodes[i].data);
+-		path->nodes[i].data = NULL;
+-	}
+ 	mdp_cmdq_pkt_destroy(&cmd->pkt);
+ 	kfree(cmd);
+ 	cmd = NULL;
+-- 
+2.45.2
+

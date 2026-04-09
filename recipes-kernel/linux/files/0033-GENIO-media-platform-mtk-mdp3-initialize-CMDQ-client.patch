@@ -1,0 +1,57 @@
+From b45901d9fd47118bdff2deba49c2cfe2859f7dc7 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Thu, 11 Jun 2026 16:30:53 +0800
+Subject: [PATCH 33/35] GENIO: media: platform: mtk-mdp3: initialize CMDQ
+ client for path topology
+
+Fix uninitialized cmdq_clt_idx field in path selection functions,
+which causes wrong CMDQ client access and performance degradation
+on platforms using kernel-side algorithms.
+
+Fixes: 51f66dc0dfb7 ("GENIO: media: platform: mtk-mdp3: add kernel algorithm  for MT8195 HDMI-RX")
+CR-Id: AUTO00855543
+Change-Id: I554911fc97ed935624009ce3ad541780123498b2
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+index 8f1082c74ebb..d1b9c6fa3f38 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+@@ -450,6 +450,7 @@ static int tp_select_path_mt8171(struct mdp_alg_task *task)
+ 	p->path_id = MDP_ALG_1ST_PIPE;
+ 	p->mmsys_idx = MDP_ALG_1ST_PIPE;
+ 	p->mutex_idx = MDP_ALG_1ST_PIPE;
++	p->cmdq_clt_idx = MDP_ALG_1ST_PIPE;
+ 
+ 	if (cfg->param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
+ 		p = &cfg->path[MDP_ALG_2ND_PIPE];
+@@ -459,6 +460,7 @@ static int tp_select_path_mt8171(struct mdp_alg_task *task)
+ 		p->path_id = MDP_ALG_2ND_PIPE;
+ 		p->mmsys_idx = MDP_ALG_1ST_PIPE;
+ 		p->mutex_idx = MDP_ALG_2ND_PIPE;
++		p->cmdq_clt_idx = MDP_ALG_2ND_PIPE;
+ 		cfg->dual = true;
+ 	}
+ 
+@@ -478,6 +480,7 @@ static int tp_select_path_mt8189(struct mdp_alg_task *task)
+ 	p->path_id = MDP_ALG_1ST_PIPE;
+ 	p->mmsys_idx = MDP_ALG_1ST_PIPE;
+ 	p->mutex_idx = MDP_ALG_1ST_PIPE;
++	p->cmdq_clt_idx = MDP_ALG_1ST_PIPE;
+ 
+ 	if (cfg->param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
+ 		p = &cfg->path[MDP_ALG_2ND_PIPE];
+@@ -487,6 +490,7 @@ static int tp_select_path_mt8189(struct mdp_alg_task *task)
+ 		p->path_id = MDP_ALG_2ND_PIPE;
+ 		p->mmsys_idx = MDP_ALG_1ST_PIPE;
+ 		p->mutex_idx = MDP_ALG_2ND_PIPE;
++		p->cmdq_clt_idx = MDP_ALG_2ND_PIPE;
+ 		cfg->dual = true;
+ 	}
+ 
+-- 
+2.45.2
+

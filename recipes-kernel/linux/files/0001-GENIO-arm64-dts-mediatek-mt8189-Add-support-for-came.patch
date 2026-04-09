@@ -1,0 +1,32 @@
+From afe4c8d9a27fb20b0ae42d25f7fce1a541830906 Mon Sep 17 00:00:00 2001
+From: "ot_zexin.ma" <ot_zexin.ma@mediatek.com>
+Date: Wed, 17 Dec 2025 17:08:48 +0800
+Subject: [PATCH] GENIO: arm64: dts: mediatek: mt8189: Add support for camera
+
+Add base support for cameras for mt8189 platforms. This requires nodes
+for the sensor interface, raw.
+
+Change-Id: Iaf1e735c739d5341f40907b35075172046203f8d
+Signed-off-by: ot_zexin.ma <ot_zexin.ma@mediatek.com>
+---
+ arch/arm64/boot/dts/mediatek/mt8189.dtsi | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt8189.dtsi b/arch/arm64/boot/dts/mediatek/mt8189.dtsi
+index 27e2064d1a0b..62ccb03da6fe 100644
+--- a/arch/arm64/boot/dts/mediatek/mt8189.dtsi
++++ b/arch/arm64/boot/dts/mediatek/mt8189.dtsi
+@@ -2276,6 +2276,10 @@ socinfo-data1@7a0 {
+ 			socinfo-data2@7e0 {
+ 				reg = <0x7e0 0x4>;
+ 			};
++
++			isp_efuse0: isp-data0@48 {
++				reg = <0x048 0x4>;
++			};
+ 		};
+ 
+ 		lvts: lvts@10315000 {
+-- 
+2.45.2
+

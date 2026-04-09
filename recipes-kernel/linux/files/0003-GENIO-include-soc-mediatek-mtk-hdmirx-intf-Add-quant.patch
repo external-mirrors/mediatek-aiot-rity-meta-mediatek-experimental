@@ -1,0 +1,75 @@
+From c37d1442b152a0182f41ef5e4d0921ed6962271c Mon Sep 17 00:00:00 2001
+From: Macross Chen <macross.chen@mediatek.com>
+Date: Wed, 8 Apr 2026 19:36:51 +0800
+Subject: [PATCH 3/3] GENIO: include: soc: mediatek: mtk-hdmirx-intf: Add
+ quantization and xfer_func
+
+Add quantization and xfer_func info for filling v4l2_format.
+
+Change-Id: Ic244c1c53348ef0a2a5d8dcd6fbff614cdd49b56
+Signed-off-by: Macross Chen <macross.chen@mediatek.com>
+---
+ include/linux/soc/mediatek/mtk-hdmirx-intf.h | 27 +++++++++++++++++---
+ 1 file changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/soc/mediatek/mtk-hdmirx-intf.h b/include/linux/soc/mediatek/mtk-hdmirx-intf.h
+index 41db3df3a0a2..60341eb14aa0 100644
+--- a/include/linux/soc/mediatek/mtk-hdmirx-intf.h
++++ b/include/linux/soc/mediatek/mtk-hdmirx-intf.h
+@@ -34,8 +34,8 @@ enum hdmirx_intf_colorimetry {
+ 	HDMIRX_INTF_COLORIMETRY_SYCC601,		/* sYCC601 */
+ 	HDMIRX_INTF_COLORIMETRY_OPYCC601,		/* opYCC601 */
+ 	HDMIRX_INTF_COLORIMETRY_OPRGB,			/* opRGB */
+-	HDMIRX_INTF_COLORIMETRY_BT2020_YCBCR,		/* BT2020, YCbcCrc */
+-	HDMIRX_INTF_COLORIMETRY_BT2020_RGB_YCBCR,	/* BT2020, RGB or YCbCr */
++	HDMIRX_INTF_COLORIMETRY_BT2020_YC_CBC_CRC,	/* BT2020 YcCbcCrc, Constant Luminance */
++	HDMIRX_INTF_COLORIMETRY_BT2020_RGB_YCBCR,	/* BT2020 RGB or YCbCr */
+ 	HDMIRX_INTF_COLORIMETRY_SMPTE2113_P3D65,	/* SMPTE_2113_P3D65 */
+ 	HDMIRX_INTF_COLORIMETRY_SMPTE2113_P3DCI,	/* SMPTE_2113_P3DCI */
+ 	HDMIRX_INTF_COLORIMETRY_BT2100,			/* BT2100 */
+@@ -44,9 +44,23 @@ enum hdmirx_intf_colorimetry {
+ 	HDMIRX_INTF_COLORIMETRY_UNKNOWN			/* unknown */
+ };
+ 
++/* transfer function */
++enum hdmirx_intf_xfer_func {
++	HDMIRX_INTF_XFER_SDR = 0,	/* SDR */
++	HDMIRX_INTF_XFER_HDR,		/* HDR */
++	HDMIRX_INTF_XFER_HDR10,		/* HDR10 (PQ based on SMPTE ST 2084) */
++	HDMIRX_INTF_XFER_HLG,		/* HLG (based on ITU-R BT.2100) */
++};
++
++/* quantization range */
++enum hdmirx_intf_quantization {
++	HDMIRX_INTF_QUANTIZED_RANGE_LIMITED = 0,	/* Limited Range */
++	HDMIRX_INTF_QUANTIZED_RANGE_FULL,		/* Full Range */
++};
++
+ /* notify event */
+ enum hdmirx_intf_notify {
+-	HDMIRX_INTF_NOTIFY_COLORIMETRY_CHANGE,	/* AVI infoframe is changed */
++	HDMIRX_INTF_NOTIFY_AVI_INFO_CHANGE = 0,		/* AVI infoframe is changed */
+ };
+ 
+ struct hdmirx_capture_interface {
+@@ -56,10 +70,17 @@ struct hdmirx_capture_interface {
+ 	enum hdmirx_intf_cs color_space;
+ 	enum hdmirx_intf_dp deep_color;
+ 	enum hdmirx_intf_colorimetry colorimetry;
++	enum hdmirx_intf_xfer_func xfer_func;
++	enum hdmirx_intf_quantization quantization;
+ 
+ 	void *priv;
+ };
+ 
++struct hdmirx_notify_avi_info_data {
++	enum hdmirx_intf_colorimetry colorimetry;
++	enum hdmirx_intf_quantization quantization;
++};
++
+ struct hdmirx_capture_ops {
+ 	int (*probe)(struct hdmirx_capture_interface *intf);
+ 	void (*disconnect)(struct hdmirx_capture_interface *intf);
+-- 
+2.45.2
+

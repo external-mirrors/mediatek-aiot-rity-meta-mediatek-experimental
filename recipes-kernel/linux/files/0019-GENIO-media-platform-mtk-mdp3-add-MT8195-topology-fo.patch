@@ -1,0 +1,433 @@
+From f6ae10a7b85f26a9d14e520b54113b44627c9ddc Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Thu, 19 Mar 2026 11:23:19 +0800
+Subject: [PATCH 19/35] GENIO: media: platform: mtk-mdp3: add MT8195 topology
+ for kernel algorithm
+
+Add the path topology used by the MT8195 kernel-side algorithms.
+
+Change-Id: Id8ad784d0acbc17cc3a94b3897689a27cc08f4dc
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../media/platform/mediatek/mdp3/mdp_alg_tp.c | 303 +++++++++++++++++-
+ .../platform/mediatek/mdp3/mdp_reg_mux.h      |  33 ++
+ .../platform/mediatek/mdp3/mtk-mdp3-alg.h     |  13 +-
+ 3 files changed, 340 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+index 011c30a1547e..84a157c6de9d 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+@@ -49,6 +49,266 @@ static const struct tp_map mt8189_path_map[TP_PATH_MAX][MDP_ALG_MAX_PATH_NODES]
+ 	},
+ };
+ 
++static const struct tp_map mt8195_path_map[TP_PATH_MAX][MDP_ALG_MAX_PATH_NODES] = {
++	[TP_PATH_FULL_PQ_P0] = {
++		{MDP_COMP_RDMA0, {
++			{MDP_COMP_FG0, {
++				{MDP_MUX_MT8195_VPPSYS0_MDP_RDMA_SOUT_SEL_IN, 0, MDP_MUX_SOUT},
++			}},
++		}},
++		{MDP_COMP_FG0, {
++			{MDP_COMP_HDR0, {
++				{MDP_MUX_MT8195_VPPSYS0_FG_MOUT_EN, 0, MDP_MUX_MOUT},
++				{MDP_MUX_MT8195_VPPSYS0_PQ_SEL_IN, 3, MDP_MUX_SELIN},
++				{MDP_MUX_MT8195_VPPSYS0_PQ_SOUT_SEL_IN, 0, MDP_MUX_SOUT},
++				{MDP_MUX_MT8195_VPPSYS0_HDR_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_HDR0, {
++			{MDP_COMP_AAL0, {
++				{MDP_MUX_MT8195_VPPSYS0_AAL_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_AAL0, {
++			{MDP_COMP_RSZ0, {
++			}},
++		}},
++		{MDP_COMP_RSZ0, {
++			{MDP_COMP_TDSHP0, {
++			}},
++		}},
++		{MDP_COMP_TDSHP0, {
++			{MDP_COMP_COLOR0, {
++			}},
++		}},
++		{MDP_COMP_COLOR0, {
++			{MDP_COMP_OVL0, {
++			}},
++		}},
++		{MDP_COMP_OVL0, {
++			{MDP_COMP_PAD0, {
++			}},
++		}},
++		{MDP_COMP_PAD0, {
++			{MDP_COMP_WROT0, {
++				{MDP_MUX_MT8195_VPPSYS0_PADDING_SOUT_SEL_IN, 0x1, MDP_MUX_SOUT},
++				{MDP_MUX_MT8195_VPPSYS0_WROT_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT0, {
++		}},
++	},
++	[TP_PATH_FULL_PQ_P1] = {
++		{MDP_COMP_RDMA1, {
++			{MDP_COMP_FG1, {
++				{MDP_MUX_MT8195_SVPP1_MDP_RDMA_SOUT_SEL, 0, MDP_MUX_SOUT},
++			}},
++		}},
++		{MDP_COMP_FG1, {
++			{MDP_COMP_HDR1, {
++				{MDP_MUX_MT8195_SVPP1_SRC_SEL_IN, 0, MDP_MUX_SELIN},
++				{MDP_MUX_MT8195_SVPP1_SRC_SEL_SOUT_SEL, 0, MDP_MUX_SOUT},
++				{MDP_MUX_MT8195_SVPP1_HDR_SRC_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_HDR1, {
++			{MDP_COMP_AAL1, {
++				{MDP_MUX_MT8195_SVPP1_MDP_AAL_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_AAL1, {
++			{MDP_COMP_RSZ1, {
++			}},
++		}},
++		{MDP_COMP_RSZ1, {
++			{MDP_COMP_TDSHP1, {
++			}},
++		}},
++		{MDP_COMP_TDSHP1, {
++			{MDP_COMP_COLOR1, {
++			}},
++		}},
++		{MDP_COMP_COLOR1, {
++			{MDP_COMP_OVL1, {
++			}},
++		}},
++		{MDP_COMP_OVL1, {
++			{MDP_COMP_PAD1, {
++			}},
++		}},
++		{MDP_COMP_PAD1, {
++			{MDP_COMP_WROT1, {
++				{MDP_MUX_MT8195_SVPP1_PATH_SOUT_SEL, 0x1, MDP_MUX_SOUT},
++				{MDP_MUX_MT8195_SVPP1_WROT_SRC_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT1, {
++		}},
++	},
++	[TP_PATH_FULL_PQ_P2] = {
++		{MDP_COMP_RDMA2, {
++			{MDP_COMP_FG2, {
++				{MDP_MUX_MT8195_SVPP2_MDP_RDMA_SOUT_SEL, 0, MDP_MUX_SOUT},
++				{MDP_MUX_MT8195_SVPP2_SRC_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_FG2, {
++			{MDP_COMP_HDR2, {
++				{MDP_MUX_MT8195_SVPP2_SRC_SEL_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_HDR2, {
++			{MDP_COMP_AAL2, {
++				{MDP_MUX_MT8195_SVPP2_MDP_HDR_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_AAL2, {
++			{MDP_COMP_RSZ2, {
++				{MDP_MUX_MT8195_SVPP2_RSZ_MERGE_IN_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_RSZ2, {
++			{MDP_COMP_TDSHP2, {
++			}},
++		}},
++		{MDP_COMP_TDSHP2, {
++			{MDP_COMP_COLOR2, {
++			}},
++		}},
++		{MDP_COMP_COLOR2, {
++			{MDP_COMP_PAD2, {
++				{MDP_MUX_MT8195_SVPP2_COLOR_SOUT_SEL, 0, MDP_MUX_SOUT},
++			}},
++		}},
++		{MDP_COMP_PAD2, {
++			{MDP_COMP_WROT2, {
++				{MDP_MUX_MT8195_SVPP2_WROT_SRC_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT2, {
++		}},
++	},
++	[TP_PATH_FULL_PQ_P3] = {
++		{MDP_COMP_RDMA3, {
++			{MDP_COMP_FG3, {
++				{MDP_MUX_MT8195_SVPP3_MDP_RDMA_SOUT_SEL, 0, MDP_MUX_SOUT},
++				{MDP_MUX_MT8195_SVPP3_SRC_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_FG3, {
++			{MDP_COMP_HDR3, {
++				{MDP_MUX_MT8195_SVPP3_SRC_SEL_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_HDR3, {
++			{MDP_COMP_AAL3, {
++				{MDP_MUX_MT8195_SVPP3_MDP_HDR_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_AAL3, {
++			{MDP_COMP_RSZ3, {
++				{MDP_MUX_MT8195_SVPP3_RSZ_MERGE_IN_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_RSZ3, {
++			{MDP_COMP_TDSHP3, {
++			}},
++		}},
++		{MDP_COMP_TDSHP3, {
++			{MDP_COMP_COLOR3, {
++			}},
++		}},
++		{MDP_COMP_COLOR3, {
++			{MDP_COMP_PAD3, {
++				{MDP_MUX_MT8195_SVPP3_COLOR_SOUT_SEL, 0, MDP_MUX_SOUT},
++			}},
++		}},
++		{MDP_COMP_PAD3, {
++			{MDP_COMP_WROT3, {
++				{MDP_MUX_MT8195_SVPP3_WROT_SRC_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT3, {
++		}},
++	},
++	[TP_PATH_HDMI_RX_P0] = {
++		{MDP_COMP_SPLIT, {
++			{MDP_COMP_HDR2, {
++				{MDP_MUX_MT8195_SVPP2_SRC_SEL_IN, 1, MDP_MUX_SELIN},
++				{MDP_MUX_MT8195_SVPP2_SRC_SEL_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_HDR2, {
++			{MDP_COMP_AAL2, {
++				{MDP_MUX_MT8195_SVPP2_MDP_HDR_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_AAL2, {
++			{MDP_COMP_RSZ2, {
++				{MDP_MUX_MT8195_SVPP2_RSZ_MERGE_IN_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_RSZ2, {
++			{MDP_COMP_TDSHP2, {
++			}},
++		}},
++		{MDP_COMP_TDSHP2, {
++			{MDP_COMP_COLOR2, {
++			}},
++		}},
++		{MDP_COMP_COLOR2, {
++			{MDP_COMP_PAD2, {
++				{MDP_MUX_MT8195_SVPP2_COLOR_SOUT_SEL, 0, MDP_MUX_SOUT},
++			}},
++		}},
++		{MDP_COMP_PAD2, {
++			{MDP_COMP_WROT2, {
++				{MDP_MUX_MT8195_SVPP2_WROT_SRC_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT2, {
++		}},
++	},
++	[TP_PATH_HDMI_RX_P1] = {
++		{MDP_COMP_SPLIT2, {
++			{MDP_COMP_HDR3, {
++				{MDP_MUX_MT8195_SVPP3_SRC_SEL_IN, 1, MDP_MUX_SELIN},
++				{MDP_MUX_MT8195_SVPP3_SRC_SEL_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_HDR3, {
++			{MDP_COMP_AAL3, {
++				{MDP_MUX_MT8195_SVPP3_MDP_HDR_MOUT_EN, 0, MDP_MUX_MOUT},
++			}},
++		}},
++		{MDP_COMP_AAL3, {
++			{MDP_COMP_RSZ3, {
++				{MDP_MUX_MT8195_SVPP3_RSZ_MERGE_IN_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_RSZ3, {
++			{MDP_COMP_TDSHP3, {
++			}},
++		}},
++		{MDP_COMP_TDSHP3, {
++			{MDP_COMP_COLOR3, {
++			}},
++		}},
++		{MDP_COMP_COLOR3, {
++			{MDP_COMP_PAD3, {
++				{MDP_MUX_MT8195_SVPP3_COLOR_SOUT_SEL, 0, MDP_MUX_SOUT},
++			}},
++		}},
++		{MDP_COMP_PAD3, {
++			{MDP_COMP_WROT3, {
++				{MDP_MUX_MT8195_SVPP3_WROT_SRC_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT3, {
++		}},
++	},
++};
++
+ static int tp_parse_path(struct mdp_dev *mdp, struct mdp_alg_path_tp *p,
+ 			 const struct tp_map *map)
+ {
+@@ -142,24 +402,49 @@ static int tp_parse_path(struct mdp_dev *mdp, struct mdp_alg_path_tp *p,
+ static int tp_select_path_mt8189(struct mdp_alg_task *task)
+ {
+ 	struct mdp_alg_frame_config *cfg = &task->cfg;
+-	struct mdp_alg_path_tp *p = &cfg->path[TP_PATH_NO_PQ_P0];
++	struct mdp_alg_path_tp *p = &cfg->path[MDP_ALG_1ST_PIPE];
+ 	int ret;
+ 
+ 	ret = tp_parse_path(task->mdp, p, mt8189_path_map[TP_PATH_NO_PQ_P0]);
+ 	if (ret)
+ 		return ret;
+-	p->path_id = TP_PATH_NO_PQ_P0;
+-	p->mmsys_idx = TP_PATH_NO_PQ_P0;
+-	p->mutex_idx = TP_PATH_NO_PQ_P0;
++	p->path_id = MDP_ALG_1ST_PIPE;
++	p->mmsys_idx = MDP_ALG_1ST_PIPE;
++	p->mutex_idx = MDP_ALG_1ST_PIPE;
+ 
+ 	if (cfg->param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
+-		p = &cfg->path[TP_PATH_NO_PQ_P1];
++		p = &cfg->path[MDP_ALG_2ND_PIPE];
+ 		ret = tp_parse_path(task->mdp, p, mt8189_path_map[TP_PATH_NO_PQ_P1]);
+ 		if (ret)
+ 			return ret;
+-		p->path_id = TP_PATH_NO_PQ_P1;
+-		p->mmsys_idx = TP_PATH_NO_PQ_P0;
+-		p->mutex_idx = TP_PATH_NO_PQ_P1;
++		p->path_id = MDP_ALG_2ND_PIPE;
++		p->mmsys_idx = MDP_ALG_1ST_PIPE;
++		p->mutex_idx = MDP_ALG_2ND_PIPE;
++		cfg->dual = true;
++	}
++
++	return ret;
++}
++
++static int tp_select_path_mt8195(struct mdp_alg_task *task)
++{
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	struct mdp_alg_path_tp *p = &cfg->path[MDP_ALG_1ST_PIPE];
++	int ret;
++
++	ret = tp_parse_path(task->mdp, p, mt8195_path_map[TP_PATH_FULL_PQ_P0]);
++	if (ret)
++		return ret;
++	p->path_id = MDP_ALG_1ST_PIPE;
++	p->mutex_idx = MDP_ALG_1ST_PIPE;
++
++	if (cfg->param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
++		p = &cfg->path[MDP_ALG_2ND_PIPE];
++		ret = tp_parse_path(task->mdp, p, mt8195_path_map[TP_PATH_FULL_PQ_P1]);
++		if (ret)
++			return ret;
++		p->path_id = MDP_ALG_1ST_PIPE;
++		p->mutex_idx = MDP_ALG_2ND_PIPE;
+ 		cfg->dual = true;
+ 	}
+ 
+@@ -171,6 +456,8 @@ int mdp_alg_tp_select_path(struct mdp_alg_task *task)
+ 	switch (task->mdp->mdp_data->mdp_alg_plat) {
+ 	case MDP_ALG_MT8189:
+ 		return tp_select_path_mt8189(task);
++	case MDP_ALG_MT8195:
++		return tp_select_path_mt8195(task);
+ 	default:
+ 		return -EINVAL;
+ 	}
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h b/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h
+index 50daf883da58..1b378c86fe45 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h
++++ b/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h
+@@ -41,4 +41,37 @@
+ #define MDP_MUX_MT8189_HDR0_SOUT_SEL		0xfa8
+ #define MDP_MUX_MT8189_HDR1_SOUT_SEL		0xfac
+ 
++#define MDP_MUX_MT8195_VPPSYS0_PQ_SEL_IN		0xf04
++#define MDP_MUX_MT8195_VPPSYS0_HDR_SEL_IN		0xf0c
++#define MDP_MUX_MT8195_VPPSYS0_WROT_SEL_IN		0xf14
++#define MDP_MUX_MT8195_VPPSYS0_AAL_SEL_IN		0xf18
++#define MDP_MUX_MT8195_VPPSYS0_MDP_RDMA_SOUT_SEL_IN	0xf1c
++#define MDP_MUX_MT8195_VPPSYS0_PQ_SOUT_SEL_IN		0xf28
++#define MDP_MUX_MT8195_VPPSYS0_PADDING_SOUT_SEL_IN	0xf2c
++#define MDP_MUX_MT8195_VPPSYS0_FG_MOUT_EN		0xf44
++
++#define MDP_MUX_MT8195_SVPP1_MDP_RDMA_SOUT_SEL		0xf18
++#define MDP_MUX_MT8195_SVPP1_SRC_SEL_IN			0xf1c
++#define MDP_MUX_MT8195_SVPP1_SRC_SEL_SOUT_SEL		0xf20
++#define MDP_MUX_MT8195_SVPP1_HDR_SRC_SEL_IN		0xf24
++#define MDP_MUX_MT8195_SVPP1_PATH_SOUT_SEL		0xf28
++#define MDP_MUX_MT8195_SVPP1_WROT_SRC_SEL_IN		0xf2c
++#define MDP_MUX_MT8195_SVPP1_TCC_SEL_IN			0xf30
++#define MDP_MUX_MT8195_SVPP1_TCC_SOUT_SEL		0xf34
++#define MDP_MUX_MT8195_SVPP2_SRC_SEL_IN			0xf38
++#define MDP_MUX_MT8195_SVPP2_COLOR_SOUT_SEL		0xf3c
++#define MDP_MUX_MT8195_SVPP2_WROT_SRC_SEL_IN		0xf40
++#define MDP_MUX_MT8195_SVPP2_RSZ_MERGE_IN_SEL_IN	0xf44
++#define MDP_MUX_MT8195_SVPP2_MDP_HDR_MOUT_EN		0xf4c
++#define MDP_MUX_MT8195_SVPP2_SRC_SEL_MOUT_EN		0xf50
++#define MDP_MUX_MT8195_SVPP1_MDP_AAL_SEL_IN		0xf54
++#define MDP_MUX_MT8195_SVPP3_MDP_RDMA_SOUT_SEL		0xf60
++#define MDP_MUX_MT8195_SVPP3_SRC_SEL_IN			0xf64
++#define MDP_MUX_MT8195_SVPP3_COLOR_SOUT_SEL		0xf68
++#define MDP_MUX_MT8195_SVPP3_WROT_SRC_SEL_IN		0xf6c
++#define MDP_MUX_MT8195_SVPP3_RSZ_MERGE_IN_SEL_IN	0xf70
++#define MDP_MUX_MT8195_SVPP3_MDP_HDR_MOUT_EN		0xf78
++#define MDP_MUX_MT8195_SVPP3_SRC_SEL_MOUT_EN		0xf7c
++#define MDP_MUX_MT8195_SVPP2_MDP_RDMA_SOUT_SEL		0xf90
++
+ #endif // __MDP_REG_MUX_H__
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+index fcb1d196865d..ef260d8fb2c0 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+@@ -17,7 +17,6 @@
+ #define MDP_ALG_MAX_PATH_NODES	27
+ #define MDP_ALG_MAX_INPUTS	2
+ #define MDP_ALG_MAX_OUTPUTS	2
+-#define MDP_ALG_MAX_PIPE	2
+ #define MDP_ALG_MAX_MUX		6
+ #define MDP_ALG_MAX_TILE_NUM	32
+ 
+@@ -34,9 +33,21 @@ struct tile_func_block;
+ enum alg_topology_scenario {
+ 	TP_PATH_NO_PQ_P0,
+ 	TP_PATH_NO_PQ_P1,
++	TP_PATH_FULL_PQ_P0,
++	TP_PATH_FULL_PQ_P1,
++	TP_PATH_FULL_PQ_P2,
++	TP_PATH_FULL_PQ_P3,
++	TP_PATH_HDMI_RX_P0,
++	TP_PATH_HDMI_RX_P1,
+ 	TP_PATH_MAX
+ };
+ 
++enum mdp_alg_pipe_id {
++	MDP_ALG_1ST_PIPE,
++	MDP_ALG_2ND_PIPE,
++	MDP_ALG_MAX_PIPE
++};
++
+ enum alg_orientation {
+ 	ROT_0 = 0,
+ 	ROT_90,
+-- 
+2.45.2
+

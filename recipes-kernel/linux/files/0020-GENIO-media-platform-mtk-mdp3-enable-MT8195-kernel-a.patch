@@ -1,0 +1,81 @@
+From 28d533198fe50bb9a40fa17b548042d29f0a3762 Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Thu, 19 Mar 2026 11:38:46 +0800
+Subject: [PATCH 20/35] GENIO: media: platform: mtk-mdp3: enable MT8195 kernel
+ algorithm for M2M device
+
+Convert the mt8195 MDP3 V4L2 M2M functionality to use kernel-side
+algorithms to eliminate the dependency on SCP.
+
+Change-Id: I314226e59ad7ac2e71b4cb3056e68abb7fb4a2bb
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c  | 1 +
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c | 6 ++----
+ drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c | 7 +------
+ 3 files changed, 4 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c b/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c
+index 1729aa2e82ec..2c8e9af85ab3 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c
+@@ -1540,6 +1540,7 @@ const struct mtk_mdp_driver_data mt8195_mdp_driver_data = {
+ 	.pipe_info_len = ARRAY_SIZE(mt8195_pipe_info),
+ 	.pp_criteria = &mt8195_mdp_pp_criteria,
+ 	.pp_used = MDP_PP_USED_4,
++	.mdp_alg_plat = MDP_ALG_MT8195,
+ };
+ 
+ s32 mdp_cfg_get_id_inner(struct mdp_dev *mdp_dev, enum mtk_mdp_comp_id id)
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c
+index 063154dff6ea..6f8cd9bafb43 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c
+@@ -2024,10 +2024,8 @@ static int mdp_comp_init(struct mdp_dev *mdp, struct device_node *node,
+ 	comp->type = mdp->mdp_data->comp_data[id].match.type;
+ 	comp->inner_id = mdp->mdp_data->comp_data[id].match.inner_id;
+ 	comp->alias_id = mdp->mdp_data->comp_data[id].match.alias_id;
+-	if (mdp->mdp_data->mdp_alg_plat)
+-		comp->alg_ops = mdp_alg_ops[comp->type];
+-	else
+-		comp->ops = mdp_comp_ops[comp->type];
++	comp->alg_ops = mdp_alg_ops[comp->type];
++	comp->ops = mdp_comp_ops[comp->type];
+ 	__mdp_comp_init(mdp, node, comp);
+ 
+ 	comp->clk_num = mdp->mdp_data->comp_data[id].info.clk_num;
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+index 9774188169df..fc550693ee08 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+@@ -160,8 +160,7 @@ void mdp_video_device_release(struct video_device *vdev)
+ 
+ 	mdp_vpu_shared_mem_free(&mdp->vpu);
+ 
+-	if (!mdp->mdp_data->mdp_alg_plat)
+-		scp_put(mdp->scp);
++	scp_put(mdp->scp);
+ 
+ 	destroy_workqueue(mdp->job_wq);
+ 	destroy_workqueue(mdp->clock_wq);
+@@ -299,9 +298,6 @@ static int mdp_probe(struct platform_device *pdev)
+ 		goto err_destroy_job_wq;
+ 	}
+ 
+-	if (mdp->mdp_data->mdp_alg_plat)
+-		goto scp_comm_unused;
+-
+ 	mdp->scp = scp_get(pdev);
+ 	if (!mdp->scp) {
+ 		mm_pdev = __get_pdev_by_id(pdev, NULL, MDP_INFRA_SCP);
+@@ -316,7 +312,6 @@ static int mdp_probe(struct platform_device *pdev)
+ 	mdp->rproc_handle = scp_get_rproc(mdp->scp);
+ 	dev_dbg(&pdev->dev, "MDP rproc_handle: %pK", mdp->rproc_handle);
+ 
+-scp_comm_unused:
+ 	mutex_init(&mdp->vpu_lock);
+ 	mutex_init(&mdp->m2m_lock);
+ 	mutex_init(&mdp->cap_lock);
+-- 
+2.45.2
+

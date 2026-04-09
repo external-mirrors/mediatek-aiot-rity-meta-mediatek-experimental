@@ -1,0 +1,373 @@
+From 8991ce3e746171f4028c92e4cc1200fdbd613d1a Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Thu, 23 Apr 2026 15:19:23 +0800
+Subject: [PATCH 26/35] GENIO: media: platform: mtk-mdp3: add support for
+ MT8171 MDP3
+
+Add MT8171 MDP3 platform data and related algorithm settings.
+MT8171 no longer uses SCP for calculations, but instead uses the
+newly added kernel algorithm to determine the topology, tiles, and
+settings of each component.
+
+Change-Id: I538cce7c1a7f5ae7455c138925c566459c66d8f7
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mdp_alg_rdma.c     |  1 +
+ .../platform/mediatek/mdp3/mdp_alg_rsz.c      |  1 +
+ .../media/platform/mediatek/mdp3/mdp_alg_tp.c | 69 +++++++++++++++
+ .../platform/mediatek/mdp3/mdp_alg_wrot.c     |  1 +
+ .../platform/mediatek/mdp3/mdp_cfg_data.c     | 84 +++++++++++++++++++
+ .../platform/mediatek/mdp3/mdp_reg_mux.h      | 15 +++-
+ .../platform/mediatek/mdp3/mtk-img-ipi.h      |  1 +
+ .../platform/mediatek/mdp3/mtk-mdp3-alg.h     |  1 +
+ .../platform/mediatek/mdp3/mtk-mdp3-cfg.h     |  1 +
+ .../platform/mediatek/mdp3/mtk-mdp3-comp.c    |  3 +
+ .../platform/mediatek/mdp3/mtk-mdp3-core.c    |  3 +
+ 11 files changed, 179 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c
+index 2362bb080492..5ac65bbf6d9c 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_rdma.c
+@@ -66,6 +66,7 @@ static inline const struct rdma_data *get_private_data(struct mdp_alg_task *task
+ 						       u32 n)
+ {
+ 	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8171:
+ 	case MDP_ALG_MT8189:
+ 		return &mt8189_rdma_data;
+ 	case MDP_ALG_MT8195:
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_rsz.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_rsz.c
+index dd5f88fe6662..79685ca48609 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_rsz.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_rsz.c
+@@ -123,6 +123,7 @@ static inline const struct rsz_data *get_private_data(struct mdp_alg_task *task,
+ 						      u32 n)
+ {
+ 	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8171:
+ 	case MDP_ALG_MT8189:
+ 		return &mt8189_rsz_data;
+ 	case MDP_ALG_MT8195:
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+index 6666bc090a03..8f1082c74ebb 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_tp.c
+@@ -18,6 +18,45 @@ struct tp_map {
+ 	struct tp_node n[MDP_ALG_MAX_OUTPUTS];
+ };
+ 
++static const struct tp_map mt8171_path_map[TP_PATH_MAX][MDP_ALG_MAX_PATH_NODES] = {
++	[TP_PATH_NO_PQ_P0] = {
++		{MDP_COMP_RDMA0, {
++			{MDP_COMP_RSZ0, {
++				{MDP_MUX_MT8171_BYP0_MOUT_EN, 0x1, MDP_MUX_MOUT},
++				{MDP_MUX_MT8171_RSZ0_SEL_IN, 0, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_RSZ0, {
++			{MDP_COMP_WROT0, {
++				{MDP_MUX_MT8171_RSZ0_SOUT_SEL, 0, MDP_MUX_SOUT},
++				{MDP_MUX_MT8171_WROT0_SEL_IN, 0, MDP_MUX_SELIN},
++				{MDP_MUX_MT8171_BYP0_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT0, {
++		}},
++	},
++	[TP_PATH_NO_PQ_P1] = {
++		{MDP_COMP_RDMA1, {
++			{MDP_COMP_RSZ1, {
++				{MDP_MUX_MT8171_BYP1_MOUT_EN, 0x1, MDP_MUX_MOUT},
++				{MDP_MUX_MT8171_RDMA1_MOUT_EN, 0x3, MDP_MUX_MOUT},
++				{MDP_MUX_MT8171_RSZ1_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_RSZ1, {
++			{MDP_COMP_WROT1, {
++				{MDP_MUX_MT8171_RSZ1_SOUT_SEL, 0x1, MDP_MUX_SOUT},
++				{MDP_MUX_MT8171_WROT1_SEL_IN, 0x2, MDP_MUX_SELIN},
++				{MDP_MUX_MT8171_BYP1_SEL_IN, 0x1, MDP_MUX_SELIN},
++			}},
++		}},
++		{MDP_COMP_WROT1, {
++		}},
++	},
++};
++
++
+ static const struct tp_map mt8189_path_map[TP_PATH_MAX][MDP_ALG_MAX_PATH_NODES] = {
+ 	[TP_PATH_NO_PQ_P0] = {
+ 		{MDP_COMP_RDMA0, {
+@@ -399,6 +438,34 @@ static int tp_parse_path(struct mdp_dev *mdp, struct mdp_alg_path_tp *p,
+ 	return 0;
+ }
+ 
++static int tp_select_path_mt8171(struct mdp_alg_task *task)
++{
++	struct mdp_alg_frame_config *cfg = &task->cfg;
++	struct mdp_alg_path_tp *p = &cfg->path[MDP_ALG_1ST_PIPE];
++	int ret;
++
++	ret = tp_parse_path(task->mdp, p, mt8171_path_map[TP_PATH_NO_PQ_P0]);
++	if (ret)
++		return ret;
++	p->path_id = MDP_ALG_1ST_PIPE;
++	p->mmsys_idx = MDP_ALG_1ST_PIPE;
++	p->mutex_idx = MDP_ALG_1ST_PIPE;
++
++	if (cfg->param->type == MDP_STREAM_TYPE_DUAL_BITBLT) {
++		p = &cfg->path[MDP_ALG_2ND_PIPE];
++		ret = tp_parse_path(task->mdp, p, mt8171_path_map[TP_PATH_NO_PQ_P1]);
++		if (ret)
++			return ret;
++		p->path_id = MDP_ALG_2ND_PIPE;
++		p->mmsys_idx = MDP_ALG_1ST_PIPE;
++		p->mutex_idx = MDP_ALG_2ND_PIPE;
++		cfg->dual = true;
++	}
++
++	return ret;
++}
++
++
+ static int tp_select_path_mt8189(struct mdp_alg_task *task)
+ {
+ 	struct mdp_alg_frame_config *cfg = &task->cfg;
+@@ -489,6 +556,8 @@ static int tp_select_path_mt8195(struct mdp_alg_task *task)
+ int mdp_alg_tp_select_path(struct mdp_alg_task *task)
+ {
+ 	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8171:
++		return tp_select_path_mt8171(task);
+ 	case MDP_ALG_MT8189:
+ 		return tp_select_path_mt8189(task);
+ 	case MDP_ALG_MT8195:
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+index 783d9cb4d7ce..9ee82837b6c5 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_wrot.c
+@@ -214,6 +214,7 @@ static inline const struct wrot_data *get_private_data(struct mdp_alg_task *task
+ 						       u32 n)
+ {
+ 	switch (task->mdp->mdp_data->mdp_alg_plat) {
++	case MDP_ALG_MT8171:
+ 	case MDP_ALG_MT8189:
+ 		return &mt8189_wrot_data;
+ 	case MDP_ALG_MT8195:
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c b/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c
+index 2c8e9af85ab3..ff8fe1b8b170 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_cfg_data.c
+@@ -163,6 +163,11 @@ enum mt8195_mdp_comp_id {
+ 	MT8195_MDP_COMP_VDO1DL1,        /* 62 */
+ };
+ 
++static const struct of_device_id mt8171_mdp_probe_infra[MDP_INFRA_MAX] = {
++	[MDP_INFRA_MMSYS] = { .compatible = "mediatek,mt8171-mdpsys" },
++	[MDP_INFRA_MUTEX] = { .compatible = "mediatek,mt8171-mdpsys-mutex" },
++};
++
+ static const struct of_device_id mt8183_mdp_probe_infra[MDP_INFRA_MAX] = {
+ 	[MDP_INFRA_MMSYS] = { .compatible = "mediatek,mt8183-mmsys" },
+ 	[MDP_INFRA_MUTEX] = { .compatible = "mediatek,mt8183-disp-mutex" },
+@@ -214,6 +219,19 @@ static const struct mdp_platform_config mt8195_plat_cfg = {
+ 	.tdshp_contour			= true,
+ };
+ 
++static const u32 mt8171_mutex_idx[MDP_MAX_COMP_COUNT] = {
++	[MDP_COMP_RDMA0] = MUTEX_MOD_IDX_MDP_RDMA0,
++	[MDP_COMP_RDMA1] = MUTEX_MOD_IDX_MDP_RDMA1,
++	[MDP_COMP_RDMA2] = MUTEX_MOD_IDX_MDP_RDMA2,
++	[MDP_COMP_RSZ0] = MUTEX_MOD_IDX_MDP_RSZ0,
++	[MDP_COMP_RSZ1] = MUTEX_MOD_IDX_MDP_RSZ1,
++	[MDP_COMP_RSZ2] = MUTEX_MOD_IDX_MDP_RSZ2,
++	[MDP_COMP_RSZ3] = MUTEX_MOD_IDX_MDP_RSZ3,
++	[MDP_COMP_WROT0] = MUTEX_MOD_IDX_MDP_WROT0,
++	[MDP_COMP_WROT1] = MUTEX_MOD_IDX_MDP_WROT1,
++	[MDP_COMP_WROT2] = MUTEX_MOD_IDX_MDP_WROT2,
++};
++
+ static const u32 mt8183_mutex_idx[MDP_MAX_COMP_COUNT] = {
+ 	[MDP_COMP_RDMA0] = MUTEX_MOD_IDX_MDP_RDMA0,
+ 	[MDP_COMP_RSZ0] = MUTEX_MOD_IDX_MDP_RSZ0,
+@@ -330,6 +348,49 @@ static const u32 mt8195_mutex_idx[MDP_MAX_COMP_COUNT] = {
+ 	[MDP_COMP_WROT3] = MUTEX_MOD_IDX_MDP_WROT3,
+ };
+ 
++static const struct mdp_comp_data mt8171_mdp_comp_data[MDP_MAX_COMP_COUNT] = {
++	[MDP_COMP_RDMA0] = {
++		{MDP_COMP_TYPE_RDMA, 0, MT8195_MDP_COMP_RDMA0, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_RDMA1] = {
++		{MDP_COMP_TYPE_RDMA, 1, MT8195_MDP_COMP_RDMA1, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_RDMA2] = {
++		{MDP_COMP_TYPE_RDMA, 2, MT8195_MDP_COMP_RDMA2, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_RSZ0] = {
++		{MDP_COMP_TYPE_RSZ, 0, MT8195_MDP_COMP_RSZ0, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_RSZ1] = {
++		{MDP_COMP_TYPE_RSZ, 1, MT8195_MDP_COMP_RSZ1, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_RSZ2] = {
++		{MDP_COMP_TYPE_RSZ, 2, MT8195_MDP_COMP_RSZ2, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_RSZ3] = {
++		{MDP_COMP_TYPE_RSZ, 3, MT8195_MDP_COMP_RSZ3, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_WROT0] = {
++		{MDP_COMP_TYPE_WROT, 0, MT8195_MDP_COMP_WROT0, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_WROT1] = {
++		{MDP_COMP_TYPE_WROT, 1, MT8195_MDP_COMP_WROT1, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++	[MDP_COMP_WROT2] = {
++		{MDP_COMP_TYPE_WROT, 2, MT8195_MDP_COMP_WROT2, MDP_MM_SUBSYS_0},
++		{1, 0, 0}
++	},
++};
++
+ static const struct mdp_comp_data mt8183_mdp_comp_data[MDP_MAX_COMP_COUNT] = {
+ 	[MDP_COMP_WPEI] = {
+ 		{MDP_COMP_TYPE_WPEI, 0, MT8183_MDP_COMP_WPEI, MDP_MM_SUBSYS_0},
+@@ -1430,6 +1491,12 @@ static const struct mdp_limit mt8195_mdp_def_limit = {
+ 	.v_scale_down_max = 128,
+ };
+ 
++static const struct mdp_pipe_info mt8171_pipe_info[] = {
++	[MDP_PIPE_RDMA0] = {MDP_PIPE_RDMA0, MDP_MM_SUBSYS_0, 0},
++	[MDP_PIPE_RDMA1] = {MDP_PIPE_RDMA1, MDP_MM_SUBSYS_0, 1},
++	[MDP_PIPE_RDMA2] = {MDP_PIPE_RDMA2, MDP_MM_SUBSYS_0, 2}
++};
++
+ static const struct mdp_pipe_info mt8183_pipe_info[] = {
+ 	[MDP_PIPE_WPEI] = {MDP_PIPE_WPEI, MDP_MM_SUBSYS_0, 0},
+ 	[MDP_PIPE_WPEI2] = {MDP_PIPE_WPEI2, MDP_MM_SUBSYS_0, 1},
+@@ -1472,6 +1539,23 @@ static const struct v4l2_rect mt8195_mdp_pp_criteria = {
+ 	.height = 1080,
+ };
+ 
++const struct mtk_mdp_driver_data mt8171_mdp_driver_data = {
++	.mdp_plat_id = MT8171,
++	.mdp_con_res = 0x1f003000,
++	.mdp_probe_infra = mt8171_mdp_probe_infra,
++	.mdp_mutex_table_idx = mt8171_mutex_idx,
++	.comp_data = mt8171_mdp_comp_data,
++	.comp_data_len = ARRAY_SIZE(mt8171_mdp_comp_data),
++	.format = mt8195_formats,
++	.format_len = ARRAY_SIZE(mt8195_formats),
++	.def_limit = &mt8195_mdp_def_limit,
++	.pipe_info = mt8171_pipe_info,
++	.pipe_info_len = ARRAY_SIZE(mt8171_pipe_info),
++	.pp_criteria = &mt8195_mdp_pp_criteria,
++	.pp_used = MDP_PP_USED_2,
++	.mdp_alg_plat = MDP_ALG_MT8171,
++};
++
+ const struct mtk_mdp_driver_data mt8183_mdp_driver_data = {
+ 	.mdp_plat_id = MT8183,
+ 	.mdp_con_res = 0x14001000,
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h b/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h
+index 1b378c86fe45..42223acde0e2 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h
++++ b/drivers/media/platform/mediatek/mdp3/mdp_reg_mux.h
+@@ -7,7 +7,20 @@
+ #ifndef __MDP_REG_MUX_H__
+ #define __MDP_REG_MUX_H__
+ 
+-/* MML MUX registers in mt8189 */
++/* MDP MUX registers in mt8171 */
++#define MDP_MUX_MT8171_BYP0_MOUT_EN		0xf24
++#define MDP_MUX_MT8171_BYP1_MOUT_EN		0xf28
++#define MDP_MUX_MT8171_RDMA1_MOUT_EN		0xf30
++#define MDP_MUX_MT8171_RSZ0_SOUT_SEL		0xf50
++#define MDP_MUX_MT8171_RSZ1_SOUT_SEL		0xf54
++#define MDP_MUX_MT8171_BYP0_SEL_IN		0xf64
++#define MDP_MUX_MT8171_BYP1_SEL_IN		0xf68
++#define MDP_MUX_MT8171_RSZ1_SEL_IN		0xf84
++#define MDP_MUX_MT8171_WROT0_SEL_IN		0xf94
++#define MDP_MUX_MT8171_WROT1_SEL_IN		0xf98
++#define MDP_MUX_MT8171_RSZ0_SEL_IN		0xf9c
++
++/* MDP MUX registers in mt8189 */
+ #define MDP_MUX_MT8189_DLI0_SEL_IN		0xf14
+ #define MDP_MUX_MT8189_DLI1_SEL_IN		0xf18
+ #define MDP_MUX_MT8189_RDMA0_MOUT_EN		0xf20
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-img-ipi.h b/drivers/media/platform/mediatek/mdp3/mtk-img-ipi.h
+index eb0c4f852bee..8297e8483e3d 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-img-ipi.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-img-ipi.h
+@@ -115,6 +115,7 @@ struct img_frameparam {
+ } __packed;
+ 
+ /* Platform config indicator */
++#define MT8171 8171
+ #define MT8183 8183
+ #define MT8188 8195
+ #define MT8195 8195
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+index 1497a9135bbe..4d7e0f9b04a6 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-alg.h
+@@ -57,6 +57,7 @@ enum alg_orientation {
+ 
+ enum mdp_alg_platform {
+ 	MDP_ALG_NOSUPPPORT = 0,
++	MDP_ALG_MT8171,
+ 	MDP_ALG_MT8189,
+ 	MDP_ALG_MT8195,
+ };
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cfg.h b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cfg.h
+index 09fcabb00167..18b9be1170d1 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cfg.h
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-cfg.h
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/types.h>
+ 
++extern const struct mtk_mdp_driver_data mt8171_mdp_driver_data;
+ extern const struct mtk_mdp_driver_data mt8183_mdp_driver_data;
+ extern const struct mtk_mdp_driver_data mt8188_mdp_driver_data;
+ extern const struct mtk_mdp_driver_data mt8195_mdp_driver_data;
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c
+index 6f8cd9bafb43..21813db862e8 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-comp.c
+@@ -1797,6 +1797,9 @@ static const struct of_device_id mdp_comp_dt_ids[] __maybe_unused = {
+ 	}, {
+ 		.compatible = "mediatek,mt8189-mdp3-rdma",
+ 		.data = (void *)MDP_COMP_TYPE_RDMA,
++	}, {
++		.compatible = "mediatek,mt8171-mdp3-rdma",
++		.data = (void *)MDP_COMP_TYPE_RDMA,
+ 	},
+ 	{}
+ };
+diff --git a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+index 4bb2b9fd4df9..8bd3dc5efc1c 100644
+--- a/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
++++ b/drivers/media/platform/mediatek/mdp3/mtk-mdp3-core.c
+@@ -19,6 +19,9 @@
+ #include "mtk-mdp3-m2m.h"
+ 
+ static const struct of_device_id mdp_of_ids[] = {
++	{ .compatible = "mediatek,mt8171-mdp3-rdma",
++	  .data = &mt8171_mdp_driver_data,
++	},
+ 	{ .compatible = "mediatek,mt8183-mdp3-rdma",
+ 	  .data = &mt8183_mdp_driver_data,
+ 	},
+-- 
+2.45.2
+

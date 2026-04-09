@@ -1,0 +1,83 @@
+From 0c6ff34b13f6fb7b8cbdb836ef97ce3977b6622e Mon Sep 17 00:00:00 2001
+From: Moudy Ho <moudy.ho@mediatek.com>
+Date: Fri, 8 May 2026 08:55:01 +0800
+Subject: [PATCH 30/35] GENIO: media: platform: mtk-mdp3: fix array
+ overrun/underrun in blend component access
+
+Add bounds checking before accessing comp array with blend component ID
+to prevent array overrun and underrun violations.
+
+Coverity issues:
+(10079) Event OVERRUN: Overrunning array at index b->b_id.
+(128) Event UNDERRUN: Underrunning array at index b->b_id (evaluates to -1)
+
+Fixed in:
+- config_path_clk_ctrl:251 (added bounds and NULL checks)
+- config_mutex_mod_ctrl:288 (added bounds check)
+
+Change-Id: I94de97bb23f8d2736295dd9fec4ba5599f7d1683
+Signed-off-by: Moudy Ho <moudy.ho@mediatek.com>
+---
+ .../platform/mediatek/mdp3/mdp_alg_core.c     | 30 +++++++++++++------
+ 1 file changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+index cdae2188a9f6..3669ad89e23d 100644
+--- a/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
++++ b/drivers/media/platform/mediatek/mdp3/mdp_alg_core.c
+@@ -241,21 +241,28 @@ static int config_path_clk_ctrl(struct mdp_alg_task *task, u32 pipe, bool clear)
+ 	for (i = 0; i < path->node_cnt; i++) {
+ 		struct mdp_comp *comp = path->nodes[i].comp;
+ 		const struct mdp_comp_blend *b;
++		struct mdp_comp *blend;
+ 
+ 		if (clear)
+ 			mdp_comp_clock_off(dev, comp);
+ 		else
+ 			mdp_comp_clock_on(dev, comp);
+ 
++		/* Enable settings for blend-dependent components */
+ 		b = &task->mdp->mdp_data->comp_data[comp->public_id].blend;
+-		if (b && b->aid_clk) {
+-			struct mdp_comp *blend = task->mdp->comp[b->b_id];
++		if (!b || !b->aid_clk)
++			continue;
++		if (b->b_id < 0 || b->b_id >= MDP_MAX_COMP_COUNT)
++			continue;
+ 
+-			if (clear)
+-				mdp_comp_clock_off(dev, blend);
+-			else
+-				mdp_comp_clock_on(dev, blend);
+-		}
++		blend = task->mdp->comp[b->b_id];
++		if (!blend)
++			continue;
++
++		if (clear)
++			mdp_comp_clock_off(dev, blend);
++		else
++			mdp_comp_clock_on(dev, blend);
+ 	}
+ 
+ 	if (!clear)
+@@ -282,9 +289,14 @@ static int config_mutex_mod_ctrl(struct mdp_alg_task *task, u32 pipe, bool clear
+ 		if (ret)
+ 			return ret;
+ 
++		/* Enable settings for blend-dependent components */
+ 		b = &data->comp_data[id].blend;
+-		if (b && b->aid_mod)
+-			mtk_mutex_write_mod(mutex, mutex_idx[b->b_id], clear);
++		if (!b || !b->aid_mod)
++			continue;
++		if (b->b_id < 0 || b->b_id >= MDP_MAX_COMP_COUNT)
++			continue;
++
++		mtk_mutex_write_mod(mutex, mutex_idx[b->b_id], clear);
+ 	}
+ 
+ 	return 0;
+-- 
+2.45.2
+
