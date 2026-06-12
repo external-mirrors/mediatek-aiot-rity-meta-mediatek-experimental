@@ -1,0 +1,67 @@
+From 6d0a19bb50cb6f169c29054057d3f387f90de407 Mon Sep 17 00:00:00 2001
+From: Felix Freimann <ffr@sonic.net>
+Date: Mon, 5 Jan 2026 12:11:14 -0800
+Subject: [PATCH] Added Jailhouse exports and prevent switch to VHE.
+
+---
+ arch/arm64/kernel/hyp-stub.S | 7 +++++++
+ mm/vmalloc.c                 | 4 +++-
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kernel/hyp-stub.S b/arch/arm64/kernel/hyp-stub.S
+index 65f76064c86b..c809fe5f38ed 100644
+--- a/arch/arm64/kernel/hyp-stub.S
++++ b/arch/arm64/kernel/hyp-stub.S
+@@ -42,6 +42,7 @@ SYM_CODE_START(__hyp_stub_vectors)
+ 	ventry	el1_fiq_invalid			// FIQ 32-bit EL1
+ 	ventry	el1_error_invalid		// Error 32-bit EL1
+ SYM_CODE_END(__hyp_stub_vectors)
++EXPORT_SYMBOL_GPL(__hyp_stub_vectors)
+ 
+ 	.align 11
+ 
+@@ -246,6 +247,12 @@ SYM_FUNC_START(finalise_el2)
+ 	cmp	w0, #BOOT_CPU_MODE_EL2
+ 	b.ne	1f
+ 
++    // [ffr] 2025-05-30  Extracted from:
++    //   jailhouse-enabling-patches/6.1.y/0101-Jailhouse-prevent-switch-to-VHE-on-VHE-capable-hardw.patch
++    //
++    // disable VHE and stay in EL1 to allow Jailhouse to load
++    ret
++
+ 	// and still be at EL1
+ 	mrs	x0, CurrentEL
+ 	cmp	x0, #CurrentEL_EL1
+diff --git a/mm/vmalloc.c b/mm/vmalloc.c
+index fb947787f25d..ee3812392095 100644
+--- a/mm/vmalloc.c
++++ b/mm/vmalloc.c
+@@ -309,7 +309,7 @@ int ioremap_page_range(unsigned long addr, unsigned long end,
+ {
+ 	int err;
+ 
+-	err = vmap_range_noflush(addr, end, phys_addr, pgprot_nx(prot),
++	err = vmap_range_noflush(addr, end, phys_addr, prot,
+ 				 ioremap_max_page_shift);
+ 	flush_cache_vmap(addr, end);
+ 	if (!err)
+@@ -317,6 +317,7 @@ int ioremap_page_range(unsigned long addr, unsigned long end,
+ 					       ioremap_max_page_shift);
+ 	return err;
+ }
++EXPORT_SYMBOL_GPL(ioremap_page_range);
+ 
+ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
+ 			     pgtbl_mod_mask *mask)
+@@ -2639,6 +2640,7 @@ struct vm_struct *__get_vm_area_caller(unsigned long size, unsigned long flags,
+ 	return __get_vm_area_node(size, 1, PAGE_SHIFT, flags, start, end,
+ 				  NUMA_NO_NODE, GFP_KERNEL, caller);
+ }
++EXPORT_SYMBOL_GPL(__get_vm_area_caller);
+ 
+ /**
+  * get_vm_area - reserve a contiguous kernel virtual area
+-- 
+2.34.1
+
