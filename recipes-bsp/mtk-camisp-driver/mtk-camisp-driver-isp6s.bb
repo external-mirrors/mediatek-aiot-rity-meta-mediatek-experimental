@@ -6,7 +6,7 @@ COMPATIBLE_MACHINE = "mt8391|mt8371"
 
 inherit module
 
-SRCREV = "1fb27ae3d04b3de02e3243a003426d7cbf675c8c"
+SRCREV = "afd3ba1c3baf641d350978278e33a549a31442de"
 
 BRANCH = "dev/isp6s"
 
