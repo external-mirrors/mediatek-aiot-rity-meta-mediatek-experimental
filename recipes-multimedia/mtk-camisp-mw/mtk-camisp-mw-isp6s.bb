@@ -12,9 +12,9 @@ SRC_URI = " \
     ${G01_AIOT_LSA_URI}/camera/isp6s/dpframework;protocol=https;branch=${BRANCH};destsuffix=git/dpframework;name=dpframework \
     ${G01_AIOT_LSA_URI}/camera/isp6s/custom-isp6s;protocol=https;branch=${BRANCH};destsuffix=git/custom;name=custom \
 "
-SRCREV_mtk-camisp-mw    = "7fac9d391d7278c636a19fbe7f5de9c52dc7d6f1"
-SRCREV_mtkcam           = "7f0b92cf76c950f3a930dedf99cc75b827575265"
-SRCREV_mtkcam3          = "e733241a30bc60664f0cb5152278b6ee05d00753"
+SRCREV_mtk-camisp-mw    = "5b21399e9c3c45fa2703e204f24811993e31bd7c"
+SRCREV_mtkcam           = "d127b5ef6ece72cd620adb53c316f2581524b158"
+SRCREV_mtkcam3          = "62e06ae77e3eae1ee1e68c005fb5f5c47f31e3a9"
 SRCREV_dpframework      = "d442dac77af2286b5bc62480eec5b0c2efc70b21"
 SRCREV_custom           = "7287327cc52644832d8166e5bc13c4700f3b79f4"
 
