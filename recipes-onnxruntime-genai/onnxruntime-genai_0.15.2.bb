@@ -1,14 +1,13 @@
 SUMMARY = "ONNX Runtime GenAI"
 HOMEPAGE = "https://github.com/microsoft/onnxruntime-genai"
-# Based on recipe from: https://github.com/NobuoTsukamoto/meta-onnxruntime/tree/main/recipes-framework/onnxruntime-genai
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=d4a904ca135bb7bc912156fee12726f0"
 
 SRCREV = "v${PV}"
-
 SRC_URI = " \
     gitsm://github.com/microsoft/onnxruntime-genai;branch=rel-${PV};protocol=https \
     file://0001-Update_ort_include_dir.patch \
+    file://0001-Enable-static-attention-mask-for-all-EPs.patch \
 "
 
 S = "${WORKDIR}/git"
@@ -18,6 +17,7 @@ DEPENDS = " \
     python3-pybind11 \
     python3-pip-native \
     python3-wheel-native \
+    python3-setuptools-native \
     nlohmann-json \
     onnxruntime \
 "
@@ -45,6 +45,7 @@ EXTRA_OECMAKE:append = " \
     -DENABLE_PYTHON=ON \
     -DUSE_GUIDANCE=OFF \
     -DENABLE_TESTS=OFF \
+    -DENABLE_TELEMETRY=OFF \
     -DORT_HOME=${RECIPE_SYSROOT}/usr \
     -DPYTHON_EXECUTABLE=${STAGING_BINDIR_NATIVE}/${PYTHON_PN}-native/${PYTHON_PN} \
     -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
@@ -52,23 +53,30 @@ EXTRA_OECMAKE:append = " \
 "
 
 do_configure[network] = "1"
+do_compile[network] = "1"
 
 do_compile:append() {
     cd ${WORKDIR}/build/wheel
-    ${STAGING_BINDIR_NATIVE}/${PYTHON_PN}-native/${PYTHON_PN} -m pip wheel --no-deps .
+    ${STAGING_BINDIR_NATIVE}/${PYTHON_PN}-native/${PYTHON_PN} -m pip wheel \
+        --no-deps \
+        --no-build-isolation \
+        .
 }
 
 do_install:append() {
     install -d ${D}${PYTHON_SITEPACKAGES_DIR}
-    ${STAGING_BINDIR_NATIVE}/${PYTHON_PN}-native/${PYTHON_PN} -m pip install --disable-pip-version-check -v \
-       -t ${D}${PYTHON_SITEPACKAGES_DIR} --no-cache-dir --no-deps \
-        ${WORKDIR}/build/wheel/onnxruntime_genai-${PV}-*.whl
+    ${STAGING_BINDIR_NATIVE}/${PYTHON_PN}-native/${PYTHON_PN} -m pip install \
+        --disable-pip-version-check -v \
+        -t ${D}${PYTHON_SITEPACKAGES_DIR} \
+        --no-cache-dir \
+        --no-deps \
+        ${WORKDIR}/build/wheel/onnxruntime_genai-*.whl
 
     rm -rf ${D}${PYTHON_SITEPACKAGES_DIR}/onnxruntime_genai/libonnxruntime-genai.so
 }
 
 FILES:${PN} += " \
-    ${PYTHON_SITEPACKAGES_DIR}/onnxruntime_genai-${DPV}.dist-info/* \
+    ${PYTHON_SITEPACKAGES_DIR}/onnxruntime_genai-*.dist-info/* \
     ${PYTHON_SITEPACKAGES_DIR}/onnxruntime_genai/* \
     ${libdir} \
     /usr/README.md \
@@ -78,4 +86,5 @@ FILES:${PN} += " \
 "
 
 FILES:${PN}-dev = "${includedir}"
+
 INSANE_SKIP:${PN} += "buildpaths already-stripped"
