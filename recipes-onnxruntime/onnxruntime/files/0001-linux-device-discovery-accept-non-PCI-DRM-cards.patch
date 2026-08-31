@@ -1,0 +1,98 @@
+From: Suyash Narain <suyash.narain@mediatek.com>
+Date: Mon, 24 Aug 2026 11:10:32 -0700
+Subject: [PATCH] linux device discovery: accept non-PCI (platform bus) DRM cards
+
+---
+--- a/onnxruntime/core/platform/linux/device_discovery.cc
++++ b/onnxruntime/core/platform/linux/device_discovery.cc
+@@ -37,6 +37,9 @@
+ struct GpuSysfsPathInfo {
+   size_t card_idx;
+   fs::path path;
++  // false for a DRM card that hangs off the platform bus instead of PCI, so it has
++  // no device/vendor, device/device or PCI bus id to read.
++  bool is_pci;
+ };
+ 
+ Status DetectGpuSysfsPaths(std::vector<GpuSysfsPathInfo>& gpu_sysfs_paths_out) {
+@@ -78,21 +81,22 @@
+     const auto& dir_item_path = dir_item.path();
+ 
+     if (size_t card_idx{}; detect_card_path(dir_item_path, card_idx)) {
+-      // Skip non-PCI DRM cards. On systems with AMD GPU compute partitioning
+-      // (XCP), the amdgpu driver creates virtual platform sub-devices
+-      // (e.g., amdgpu_xcp_*) that lack standard PCI sysfs attributes.
++      // A DRM card with no PCI "vendor" attribute sits on the platform bus. That is
++      // either an AMD GPU compute partitioning (XCP) virtual sub-device, or - on a SoC
++      // - the real GPU/display engine (e.g. mediatek-drm). Keep it either way, and
++      // remember that none of the PCI sysfs attributes are available on it.
+       const auto vendor_path = dir_item_path / "device" / "vendor";
+       const bool vendor_path_exists = fs::exists(vendor_path, error_code);
+       ORT_RETURN_IF_ERROR(ErrorCodeToStatus(error_code, vendor_path, "Checking existence of DRM card vendor sysfs attribute"));
+ 
+       if (!vendor_path_exists) {
+-        LOGS_DEFAULT(VERBOSE) << "Skipping non-PCI DRM card: " << dir_item_path;
+-        continue;
++        LOGS_DEFAULT(VERBOSE) << "Found non-PCI (platform bus) DRM card: " << dir_item_path;
+       }
+ 
+       GpuSysfsPathInfo path_info{};
+       path_info.card_idx = card_idx;
+       path_info.path = dir_item_path;
++      path_info.is_pci = vendor_path_exists;
+       gpu_sysfs_paths.emplace_back(std::move(path_info));
+     }
+   }
+@@ -156,18 +160,26 @@
+   OrtHardwareDevice gpu_device{};
+   const auto& sysfs_path = path_info.path;
+ 
+-  // vendor id
++  // A platform bus card has no PCI ids; leave both at 0 and tag it instead so that
++  // callers doing vendor/device filtering can tell the 0s apart from a real read.
+   uint16_t vendor_id{};
+-  const auto vendor_id_path = sysfs_path / "device" / "vendor";
+-  ORT_RETURN_IF_ERROR(ReadValueFromFile(vendor_id_path, vendor_id));
+-  gpu_device.vendor_id = vendor_id;
++  uint16_t device_id{};
+ 
+-  // TODO vendor name
++  if (path_info.is_pci) {
++    // vendor id
++    const auto vendor_id_path = sysfs_path / "device" / "vendor";
++    ORT_RETURN_IF_ERROR(ReadValueFromFile(vendor_id_path, vendor_id));
++
++    // TODO vendor name
++
++    // device id
++    const auto device_id_path = sysfs_path / "device" / "device";
++    ORT_RETURN_IF_ERROR(ReadValueFromFile(device_id_path, device_id));
++  } else {
++    gpu_device.metadata.Add("platform_device", "1");
++  }
+ 
+-  // device id
+-  uint16_t device_id{};
+-  const auto device_id_path = sysfs_path / "device" / "device";
+-  ORT_RETURN_IF_ERROR(ReadValueFromFile(device_id_path, device_id));
++  gpu_device.vendor_id = vendor_id;
+   gpu_device.device_id = device_id;
+ 
+   // metadata
+@@ -178,10 +190,12 @@
+     gpu_device.metadata.Add("Discrete", (*is_gpu_discrete ? "1" : "0"));
+   }
+ 
+-  std::optional<std::string> pci_bus_id;
+-  ORT_RETURN_IF_ERROR(GetPciBusId(sysfs_path, pci_bus_id));
+-  if (pci_bus_id) {
+-    gpu_device.metadata.Add("pci_bus_id", std::move(*pci_bus_id));
++  if (path_info.is_pci) {
++    std::optional<std::string> pci_bus_id;
++    ORT_RETURN_IF_ERROR(GetPciBusId(sysfs_path, pci_bus_id));
++    if (pci_bus_id) {
++      gpu_device.metadata.Add("pci_bus_id", std::move(*pci_bus_id));
++    }
+   }
+ 
+   gpu_device.type = OrtHardwareDeviceType_GPU;

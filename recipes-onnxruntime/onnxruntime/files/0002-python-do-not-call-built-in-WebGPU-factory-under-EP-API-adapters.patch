@@ -1,0 +1,19 @@
+From: Suyash Narain <suyash.narain@mediatek.com>
+Date: Mon, 24 Aug 2026 11:15:06 -0700
+Subject: [PATCH] python: do not call the built-in WebGPU factory under EP API adapters
+
+---
+--- a/onnxruntime/python/onnxruntime_pybind_state.cc
++++ b/onnxruntime/python/onnxruntime_pybind_state.cc
+@@ -1446,7 +1446,10 @@
+         cit == provider_options_map.end() ? ProviderOptions{} : cit->second, &session_options);
+ #endif
+   } else if (type == kWebGpuExecutionProvider) {
+-#if defined(USE_WEBGPU)
++    // With ORT_USE_EP_API_ADAPTERS the WebGPU EP is built as a separate plugin EP shared
++    // library, so WebGpuProviderFactoryCreator is not linked into pybind module. Select it
++    // through plugin EP method.
++#if defined(USE_WEBGPU) && !defined(ORT_USE_EP_API_ADAPTERS)
+     return onnxruntime::WebGpuProviderFactoryCreator::Create(session_options.config_options);
+ #endif
+   } else if (type == kCannExecutionProvider) {
