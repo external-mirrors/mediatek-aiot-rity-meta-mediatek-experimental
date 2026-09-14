@@ -1,0 +1,869 @@
+From 59ef0f47b41fb99e5759f7320aa9c1c089e2fb6d Mon Sep 17 00:00:00 2001
+From: Felix Freimann <felix.freimann@mediatek.com>
+Date: Wed, 9 Sep 2026 11:28:51 -0700
+Subject: [PATCH] GENIO: remoteproc: add mtk_jh_rproc driver
+
+Adds support for creating RPMsg channels to a Jailhouse inmate using the
+standard Linux remoteproc attach operation.  The driver never loads
+firmware and never starts the remote; it attaches to an already-running
+inmate over the Jailhouse vPCI ivshmem-v2 device and provides the virtio
+transport only.
+
+Upstream-Status: Pending
+---
+ drivers/remoteproc/Kconfig        |  14 +
+ drivers/remoteproc/Makefile       |   1 +
+ drivers/remoteproc/mtk_jh_rproc.c | 807 ++++++++++++++++++++++++++++++
+ 3 files changed, 822 insertions(+)
+ create mode 100644 drivers/remoteproc/mtk_jh_rproc.c
+
+diff --git a/drivers/remoteproc/Kconfig b/drivers/remoteproc/Kconfig
+index 48845dc8fa85..57358fa33181 100644
+--- a/drivers/remoteproc/Kconfig
++++ b/drivers/remoteproc/Kconfig
+@@ -365,6 +365,20 @@ config XLNX_R5_REMOTEPROC
+ 
+ 	  It's safe to say N if not interested in using RPU r5f cores.
+ 
++config MTK_JH_REMOTEPROC
++	tristate "MediaTek Genio Jailhouse inmate remoteproc support"
++	depends on PCI && ARCH_MEDIATEK
++	depends on REMOTEPROC
++	select RPMSG_VIRTIO
++	help
++	  Attaches Linux's in-kernel RPMsg stack to a Zephyr inmate running
++	  on a CPU that the Jailhouse hypervisor has removed from the root
++	  cell.  The driver never loads firmware and never starts the remote:
++	  "jailhouse cell create/load/start" does that.  It attaches to an
++	  already-running inmate and provides the virtio transport only.
++
++	  Say m here to build it as a module, mtk_jh_rproc.
++
+ endif # REMOTEPROC
+ 
+ endmenu
+diff --git a/drivers/remoteproc/Makefile b/drivers/remoteproc/Makefile
+index 91314a9b43ce..d4a83818427b 100644
+--- a/drivers/remoteproc/Makefile
++++ b/drivers/remoteproc/Makefile
+@@ -39,3 +39,4 @@ obj-$(CONFIG_STM32_RPROC)		+= stm32_rproc.o
+ obj-$(CONFIG_TI_K3_DSP_REMOTEPROC)	+= ti_k3_dsp_remoteproc.o
+ obj-$(CONFIG_TI_K3_R5_REMOTEPROC)	+= ti_k3_r5_remoteproc.o
+ obj-$(CONFIG_XLNX_R5_REMOTEPROC)	+= xlnx_r5_remoteproc.o
++obj-$(CONFIG_MTK_JH_REMOTEPROC)		+= mtk_jh_rproc.o
+diff --git a/drivers/remoteproc/mtk_jh_rproc.c b/drivers/remoteproc/mtk_jh_rproc.c
+new file mode 100644
+index 000000000000..0ac5ccbbf45a
+--- /dev/null
++++ b/drivers/remoteproc/mtk_jh_rproc.c
+@@ -0,0 +1,807 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * MediaTek Genio remoteproc driver for a Jailhouse inmate
++ *
++ * Copyright (c) 2026 MediaTek Inc.
++ *
++ * Connects Linux's in-kernel RPMsg stack to an RTOS inmate running on a CPU
++ * that the Jailhouse hypervisor has removed from the root cell.  The link is
++ * an ivshmem-v2 virtual PCI device supplying shared memory and a doorbell.
++ *
++ *
++ * THIS DRIVER NEVER BOOTS ANYTHING
++ * ================================
++ * The inmate CPU belongs to the hypervisor.  Only EL2 can withdraw a core
++ * from the root cell and reset it to the inmate entry point, and the inmate
++ * image is placed by the hypervisor while the window is still mapped to the
++ * root cell.  Linux never sees the firmware and cannot start or stop the
++ * core.  Bring-up is therefore:
++ *
++ *     jailhouse cell create genio-700-evk-zephyr.cell
++ *     jailhouse cell load   zephyr zephyr.bin -a 0x8000
++ *     jailhouse cell start  zephyr
++ *          ... this driver attaches here ...
++ *
++ * Accordingly .load, .start, .stop, .prepare and .unprepare are not
++ * implemented.  The rproc is registered in RPROC_DETACHED so the remoteproc
++ * core takes the attach path and never requests firmware.  This mirrors the
++ * "IPC-only mode" of ti_k3_dsp_remoteproc.c, except that the mode is
++ * unconditional here: there is no configuration in which Linux could boot
++ * this remote.
++ *
++ *
++ * RESOURCE TABLE
++ * ==============
++ * Because Linux never parses an ELF, the resource table is located by
++ * contract: it sits at the base of the ivshmem read/write section, where the
++ * inmate's linker script places it.  The TI K3 drivers use the same approach
++ * and for the same reason -- the remote may be started by an agent that has
++ * no means of publishing the table's address.
++ *
++ *
++ * SHARED MEMORY LAYOUT (ivshmem-v2)
++ * =================================
++ * The vendor capability describes four consecutive regions:
++ *
++ *     state table      read-only    one u32 per peer
++ *     read/write       shared RW    resource table, vrings, RPMsg buffers
++ *     input sections   read-only    one per peer
++ *     output section   write        ours alone
++ *
++ * Only the state table and the read/write section are used here. The resource
++ * table and vrings are alligned on a PAGE (4kByte) boundary.
++ *
++ *
++ * DOORBELL
++ * ========
++ * Writing (target_peer << 16) | vector to the doorbell register raises the
++ * peer's interrupt.  The Genio cell configurations use INTx, so the only
++ * valid vector is 0.
++ */
++
++#include <linux/bitops.h>
++#include <linux/delay.h>
++#include <linux/dma-map-ops.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/pci.h>
++#include <linux/remoteproc.h>
++#include <linux/sizes.h>
++
++#include "remoteproc_internal.h"
++
++
++#define MTK_JH_RPROC_DRV		"mtk-jh-rproc"
++
++#define IVSHMEM_PREFERRED_ALLOC_CHUNKS  4096
++
++#ifndef PCI_VENDOR_ID_SIEMENS
++#define PCI_VENDOR_ID_SIEMENS		0x110a
++#endif
++#define PCI_DEVICE_ID_IVSHMEM		0x4106
++
++/*
++ * The hypervisor seeds the class-code dword with PCI_DEV_CLASS_OTHER << 24
++ * and then ORs in (shmem_protocol << 8).  Linux exposes the upper three
++ * bytes as pdev->class, so a raw shared-memory link presents as
++ *
++ *     pdev->class == (PCI_CLASS_OTHERS << 16) | IVSHM_PROTO_UNDEFINED
++ *
++ * Matching on that in the id_table keeps this driver away from veth and
++ * virtio links, which belong to other consumers.
++ */
++#define IVSHM_PROTO_UNDEFINED		0x0000
++
++/* BAR0 register block */
++struct ivshm_regs {
++	u32 id;
++	u32 max_peers;
++	u32 int_control;
++	u32 doorbell;
++	u32 state;
++};
++
++#define IVSHM_INT_ENABLE		BIT(0)
++
++/* offsets within the PCI vendor-specific capability */
++#define IVSHM_CFG_PRIV_CNTL		0x03
++#define IVSHM_CFG_STATE_TAB_SZ		0x04
++#define IVSHM_CFG_RW_SECTION_SZ		0x08
++#define IVSHM_CFG_ADDRESS		0x18
++
++#define IVSHM_PRIV_CNTL_ONESHOT_INT	BIT(0)
++
++/* peer state values exchanged through the state table */
++#define MTK_JH_STATE_RESET		0
++#define MTK_JH_STATE_READY		1
++
++/* how long to wait for the inmate to publish MTK_JH_STATE_READY */
++#define MTK_JH_PEER_TIMEOUT_MS		2000
++
++/*
++ * Upper bound reported for the resource table, following the precedent set
++ * by ti_k3_dsp_remoteproc.c.  The exact length is not recoverable without
++ * parsing every entry; a fixed bound comfortably covers the expected
++ * contents -- one vdev entry with two vrings, plus an optional trace entry --
++ * while remaining far inside the read/write section.
++ */
++#define MTK_JH_RSC_TABLE_MAX		SZ_4K
++
++/* refuse obviously corrupt tables before the core walks them */
++#define MTK_JH_RSC_MAX_ENTRIES		16
++
++/**
++ * struct mtk_jh_rproc - driver state
++ * @rproc:        remoteproc handle
++ * @pdev:         backing ivshmem virtual PCI device
++ * @regs:         BAR0 register block
++ * @state_tab:    peer state table, normal cacheable memory
++ * @rw_va:        mapping of the read/write section
++ * @rw_pa:        physical base of the read/write section
++ * @rw_size:      size of the read/write section
++ * @this_id:      our own peer id, read from the ID register
++ * @peer_id:      the inmate's peer id
++ * @irq:          doorbell interrupt
++ * @irq_taken:    whether @irq is currently claimed
++ * @irq_work:     work items to process IRQ's
++ * @alloc_lock:   DMA memory ops lock
++ * @alloc_map:    allocation bitmap
++ * @alloc_shift:  allocation size shift
++ * @map_src_addr: source address map
++ */
++struct mtk_jh_rproc {
++	struct rproc		*rproc;
++	struct pci_dev		*pdev;
++	struct ivshm_regs	__iomem *regs;
++	const u32			*state_tab;
++	void				*rw_va;
++	phys_addr_t			rw_pa;
++	size_t				rw_size;
++	u32					this_id;
++	u32					peer_id;
++	int					irq;
++	bool				irq_taken;
++
++    /* Work queue to process IRQ's. */
++	struct work_struct	irq_work;
++
++	/* DMA ops related. */
++	spinlock_t		alloc_lock;
++	unsigned long	*alloc_bitmap;
++	unsigned int	alloc_shift;
++	void			**map_src_addr;
++};
++
++/* Work queue to handle IRQ's. */
++static struct workqueue_struct *mtk_jh_irq_wq;
++
++
++static void mtk_jh_rproc_kick(struct rproc *rproc, int vqid);
++static void *mtk_jh_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len,
++				   bool *is_iomem);
++static struct resource_table *mtk_jh_rproc_get_loaded_rsc_table(
++				  struct rproc *rproc, size_t *table_sz);
++static void mtk_jh_irq_work(struct work_struct *work);
++static irqreturn_t mtk_jh_rproc_irq(int irq, void *data);
++static int mtk_jh_rproc_wait_peer(struct mtk_jh_rproc *priv);
++static int mtk_jh_rproc_attach(struct rproc *rproc);
++static int mtk_jh_rproc_detach(struct rproc *rproc);
++
++static inline unsigned int get_custom_order(unsigned long size,
++					    unsigned int shift);
++static struct mtk_jh_rproc *to_mtk_jh_rproc(struct device *dev);
++static void *mtk_jh_dma_alloc(struct device *dev, size_t size,
++			  dma_addr_t *dma_handle, gfp_t flag,
++			  unsigned long attrs);
++static void mtk_jh_dma_free(struct device *dev, size_t size, void *vaddr,
++			dma_addr_t dma_handle, unsigned long attrs);
++static dma_addr_t mtk_jh_dma_map_page(struct device *dev, struct page *page,
++				  unsigned long offset, size_t size,
++				  enum dma_data_direction dir,
++				  unsigned long attrs);
++static void mtk_jh_dma_unmap_page(struct device *dev, dma_addr_t dma_addr,
++			      size_t size, enum dma_data_direction dir,
++			      unsigned long attrs);
++static void mtk_jh_dma_sync_single_for_cpu(struct device *dev, dma_addr_t dma_addr,
++			   size_t size, enum dma_data_direction dir);
++static void mtk_jh_dma_sync_single_for_device(struct device *dev, dma_addr_t dma_addr,
++			      size_t size, enum dma_data_direction dir);
++
++static u64 mtk_jh_cfg_read64(struct pci_dev *pdev, int pos);
++static int mtk_jh_rproc_map_shmem(struct mtk_jh_rproc *priv);
++static int mtk_jh_rproc_probe(struct pci_dev *pdev,
++			      const struct pci_device_id *id);
++static void mtk_jh_rproc_remove(struct pci_dev *pdev);
++static int __init mtk_jh_rproc_init(void);
++static void __exit mtk_jh_rproc_exit(void);
++
++
++/* ------------------------------------------------------------------ ops */
++
++/*
++ * Raise the inmate's doorbell.  vqid is not transmitted: ivshmem carries no
++ * payload, and the peer determines which queue advanced by inspecting the
++ * vrings.  The vector field must be 0 because the cells use INTx.
++ */
++static void mtk_jh_rproc_kick(struct rproc *rproc, int vqid)
++{
++	struct mtk_jh_rproc *priv = rproc->priv;
++
++	writel((priv->peer_id << 16) | 0, &priv->regs->doorbell);
++}
++
++/*
++ * Translate a device address published by the inmate into a kernel virtual
++ * address.  By contract every such address -- the resource table, the vrings
++ * and the RPMsg buffer pool -- is a physical address inside the read/write
++ * section.
++ */
++static void *mtk_jh_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len,
++				   bool *is_iomem)
++{
++	struct mtk_jh_rproc *priv = rproc->priv;
++	u64 offset;
++
++	if (da < priv->rw_pa)
++		return NULL;
++
++	offset = da - priv->rw_pa;
++	if (offset > priv->rw_size || len > priv->rw_size - offset)
++		return NULL;
++
++	if (is_iomem)
++		*is_iomem = false;
++
++	return priv->rw_va + offset;
++}
++
++static struct resource_table *mtk_jh_rproc_get_loaded_rsc_table(
++				  struct rproc *rproc, size_t *table_sz)
++{
++	struct mtk_jh_rproc *priv = rproc->priv;
++	struct device *dev = &priv->pdev->dev;
++	struct resource_table *table = priv->rw_va;
++
++	if (table->ver != 1) {
++		dev_err(dev,
++			"resource table version %u at %pa unsupported; is the inmate running?\n",
++			table->ver, &priv->rw_pa);
++		return ERR_PTR(-EINVAL);
++	}
++
++	if (table->num > MTK_JH_RSC_MAX_ENTRIES) {
++		dev_err(dev, "resource table claims %u entries; refusing\n",
++			table->num);
++		return ERR_PTR(-EINVAL);
++	}
++
++	*table_sz = MTK_JH_RSC_TABLE_MAX;
++
++	return table;
++}
++
++static void mtk_jh_irq_work(struct work_struct *work)
++{
++	struct mtk_jh_rproc *priv = container_of(work, struct mtk_jh_rproc, irq_work);
++
++	/*
++	 * The doorbell conveys no queue index, so both virtqueues are polled.
++	 * rproc_vq_interrupt() tolerates being called for an idle queue.
++	 */
++	rproc_vq_interrupt(priv->rproc, 0);
++	rproc_vq_interrupt(priv->rproc, 1);
++}
++
++static irqreturn_t mtk_jh_rproc_irq(int irq, void *data)
++{
++	struct rproc *rproc = data;
++	struct mtk_jh_rproc *priv = rproc->priv;
++
++
++	queue_work(mtk_jh_irq_wq, &priv->irq_work);
++
++	return IRQ_HANDLED;
++}
++
++static int mtk_jh_rproc_wait_peer(struct mtk_jh_rproc *priv)
++{
++	unsigned long deadline = jiffies +
++				 msecs_to_jiffies(MTK_JH_PEER_TIMEOUT_MS);
++
++	/*
++	 * The inmate publishes MTK_JH_STATE_READY once its vrings are set up.
++	 * Until then the resource table contents are not meaningful.
++	 */
++	do {
++		if (READ_ONCE(priv->state_tab[priv->peer_id]) ==
++		    MTK_JH_STATE_READY) {
++			/* order the state read ahead of any vring access */
++			smp_rmb();
++			return 0;
++		}
++		usleep_range(1000, 2000);
++	} while (time_before(jiffies, deadline));
++
++	return -ETIMEDOUT;
++}
++
++/*
++ * Attach to an inmate the hypervisor has already started.  Nothing is
++ * booted here; this only establishes the doorbell in both directions.
++ */
++static int mtk_jh_rproc_attach(struct rproc *rproc)
++{
++	struct mtk_jh_rproc *priv = rproc->priv;
++	struct device *dev = &priv->pdev->dev;
++	int ret;
++
++	ret = mtk_jh_rproc_wait_peer(priv);
++	if (ret) {
++		dev_err(dev, "inmate (peer %u) did not become ready\n",
++			priv->peer_id);
++		return ret;
++	}
++
++	ret = request_irq(priv->irq, mtk_jh_rproc_irq, IRQF_SHARED,
++			  MTK_JH_RPROC_DRV, rproc);
++	if (ret) {
++		dev_err(dev, "cannot claim doorbell irq %d: %d\n",
++			priv->irq, ret);
++		return ret;
++	}
++	priv->irq_taken = true;
++
++	writel(IVSHM_INT_ENABLE, &priv->regs->int_control);
++	writel(MTK_JH_STATE_READY, &priv->regs->state);
++
++	dev_info(dev, "attached to inmate peer %u\n", priv->peer_id);
++
++	return 0;
++}
++
++static int mtk_jh_rproc_detach(struct rproc *rproc)
++{
++	struct mtk_jh_rproc *priv = rproc->priv;
++	struct device *dev = &priv->pdev->dev;
++
++	/*
++	 * Withdraw before tearing anything down.  The inmate keeps running:
++	 * stopping it is "jailhouse cell destroy", which must happen after
++	 * this driver has detached.
++	 */
++	writel(MTK_JH_STATE_RESET, &priv->regs->state);
++	writel(0, &priv->regs->int_control);
++
++	if (priv->irq_taken) {
++		free_irq(priv->irq, rproc);
++		priv->irq_taken = false;
++	}
++
++	dev_info(dev, "detached; the inmate is still running\n");
++
++	return 0;
++}
++
++/* No .load, .start, .stop, .prepare or .unprepare -- see the file header. */
++static const struct rproc_ops mtk_jh_rproc_ops = {
++	.attach			= mtk_jh_rproc_attach,
++	.detach			= mtk_jh_rproc_detach,
++	.kick			= mtk_jh_rproc_kick,
++	.da_to_va		= mtk_jh_rproc_da_to_va,
++	.get_loaded_rsc_table	= mtk_jh_rproc_get_loaded_rsc_table,
++};
++
++/* -------------------------------------------------------------- dma ops */
++
++static inline unsigned int get_custom_order(unsigned long size,
++					    unsigned int shift)
++{
++	size--;
++	size >>= shift;
++#if BITS_PER_LONG == 32
++	return fls(size);
++#else
++	return fls64(size);
++#endif
++}
++
++static struct mtk_jh_rproc *to_mtk_jh_rproc(struct device *dev)
++{
++    struct rproc   *rproc;
++	struct pci_dev *pci_dev;
++
++
++    while (dev && (! dev_is_pci (dev)))
++    {
++        dev = dev->parent;
++    }
++
++    if (! dev)
++        return NULL;
++
++    pci_dev = to_pci_dev (dev);
++
++    rproc = pci_get_drvdata(pci_dev);
++
++    if (! rproc)
++        return NULL;
++
++    return (struct mtk_jh_rproc*) rproc->priv;
++}
++
++static void *mtk_jh_dma_alloc(struct device *dev, size_t size,
++			  dma_addr_t *dma_handle, gfp_t flag,
++			  unsigned long attrs)
++{
++	struct mtk_jh_rproc *priv = to_mtk_jh_rproc (dev);
++	int order;
++	int chunk = -ENOMEM;
++	unsigned long flags;
++	void *addr;
++
++    if (! priv)
++        return NULL;
++
++	order = get_custom_order(size, priv->alloc_shift);
++
++	spin_lock_irqsave(&priv->alloc_lock, flags);
++	chunk = bitmap_find_free_region(priv->alloc_bitmap,
++					priv->rw_size >> priv->alloc_shift,
++					order);
++	spin_unlock_irqrestore(&priv->alloc_lock, flags);
++
++	if (chunk < 0) {
++		if (!(attrs & DMA_ATTR_NO_WARN) && printk_ratelimit())
++			dev_warn(dev,
++				 "shared memory is full (size: %zd bytes)\n",
++				 size);
++		return NULL;
++	}
++
++	*dma_handle = chunk << priv->alloc_shift;
++	addr = priv->rw_va + *dma_handle;
++	memset(addr, 0, size);
++
++	return addr;
++}
++
++static void mtk_jh_dma_free(struct device *dev, size_t size, void *vaddr,
++			dma_addr_t dma_handle, unsigned long attrs)
++{
++	struct mtk_jh_rproc *priv = to_mtk_jh_rproc (dev);
++
++	if (priv) {
++		int order = get_custom_order(size, priv->alloc_shift);
++		int chunk = (int)(dma_handle >> priv->alloc_shift);
++		unsigned long flags;
++
++		spin_lock_irqsave(&priv->alloc_lock, flags);
++		bitmap_release_region(priv->alloc_bitmap, chunk, order);
++		spin_unlock_irqrestore(&priv->alloc_lock, flags);
++	}
++}
++
++static dma_addr_t mtk_jh_dma_map_page(struct device *dev, struct page *page,
++				  unsigned long offset, size_t size,
++				  enum dma_data_direction dir,
++				  unsigned long attrs)
++{
++	struct mtk_jh_rproc *priv = to_mtk_jh_rproc (dev);
++	void *buffer, *orig_addr;
++	dma_addr_t dma_addr;
++
++	if (! priv)
++		return DMA_MAPPING_ERROR;
++
++	buffer = mtk_jh_dma_alloc(dev, size, &dma_addr, 0, attrs);
++	if (!buffer)
++		return DMA_MAPPING_ERROR;
++
++	orig_addr = page_address(page) + offset;
++	priv->map_src_addr[dma_addr >> priv->alloc_shift] = orig_addr;
++
++	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC) &&
++	    (dir == DMA_TO_DEVICE || dir == DMA_BIDIRECTIONAL))
++		memcpy(buffer, orig_addr, size);
++
++	return dma_addr;
++}
++
++static void mtk_jh_dma_unmap_page(struct device *dev, dma_addr_t dma_addr,
++			      size_t size, enum dma_data_direction dir,
++			      unsigned long attrs)
++{
++	struct mtk_jh_rproc *priv = to_mtk_jh_rproc (dev);
++
++	if (priv) {
++		void *orig_addr = priv->map_src_addr[dma_addr >> priv->alloc_shift];
++		void *buffer = priv->rw_va + dma_addr;
++
++		if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC) &&
++    	        ((dir == DMA_FROM_DEVICE) || (dir == DMA_BIDIRECTIONAL)))
++			memcpy(orig_addr, buffer, size);
++
++		mtk_jh_dma_free(dev, size, buffer, dma_addr, attrs);
++	}
++}
++
++static void mtk_jh_dma_sync_single_for_cpu(struct device *dev, dma_addr_t dma_addr,
++			   size_t size, enum dma_data_direction dir)
++{
++	struct mtk_jh_rproc *priv = to_mtk_jh_rproc (dev);
++	void *orig_addr = priv->map_src_addr[dma_addr >> priv->alloc_shift];
++	void *buffer = priv->rw_va + dma_addr;
++
++	memcpy(orig_addr, buffer, size);
++}
++
++static void mtk_jh_dma_sync_single_for_device(struct device *dev, dma_addr_t dma_addr,
++			      size_t size, enum dma_data_direction dir)
++{
++	struct mtk_jh_rproc *priv = to_mtk_jh_rproc (dev);
++	void *orig_addr = priv->map_src_addr[dma_addr >> priv->alloc_shift];
++	void *buffer = priv->rw_va + dma_addr;
++
++	memcpy(buffer, orig_addr, size);
++}
++
++static const struct dma_map_ops mtk_jh_dma_ops = {
++	.alloc = mtk_jh_dma_alloc,
++	.free = mtk_jh_dma_free,
++	.map_page = mtk_jh_dma_map_page,
++	.unmap_page = mtk_jh_dma_unmap_page,
++	.sync_single_for_cpu = mtk_jh_dma_sync_single_for_cpu,
++	.sync_single_for_device = mtk_jh_dma_sync_single_for_device,
++};
++
++/* -------------------------------------------------------------- probing */
++
++static u64 mtk_jh_cfg_read64(struct pci_dev *pdev, int pos)
++{
++	u32 lo, hi;
++
++	pci_read_config_dword(pdev, pos, &lo);
++	pci_read_config_dword(pdev, pos + 4, &hi);
++
++	return lo | ((u64)hi << 32);
++}
++
++static int mtk_jh_rproc_map_shmem(struct mtk_jh_rproc *priv)
++{
++	unsigned int chunks, chunk_size, bitmap_size;
++	struct pci_dev *pdev = priv->pdev;
++	struct device *dev = &pdev->dev;
++	phys_addr_t base;
++	u32 state_sz;
++	u64 rw_sz;
++	int cap;
++
++	cap = pci_find_capability(pdev, PCI_CAP_ID_VNDR);
++	if (!cap) {
++		dev_err(dev, "ivshmem vendor capability missing\n");
++		return -ENODEV;
++	}
++
++	/* the shared region is either BAR2 or announced through the capability */
++	if (pci_resource_len(pdev, 2))
++		base = pci_resource_start(pdev, 2);
++	else
++		base = mtk_jh_cfg_read64(pdev, cap + IVSHM_CFG_ADDRESS);
++
++	pci_read_config_dword(pdev, cap + IVSHM_CFG_STATE_TAB_SZ, &state_sz);
++	if (!state_sz) {
++		dev_err(dev, "no state table in the shared region\n");
++		return -ENODEV;
++	}
++
++	rw_sz = mtk_jh_cfg_read64(pdev, cap + IVSHM_CFG_RW_SECTION_SZ);
++	if (rw_sz < MTK_JH_RSC_TABLE_MAX) {
++		dev_err(dev,
++			"read/write section is %llu bytes, need at least %u; check the cell configuration\n",
++			rw_sz, MTK_JH_RSC_TABLE_MAX);
++		return -ENODEV;
++	}
++
++	/*
++	 * Both mappings are write-back cacheable.  Root cell and inmate are
++	 * cores of the same cluster in one inner-shareable domain, so the
++	 * vrings are hardware coherent and need no explicit maintenance on
++	 * this side.
++	 */
++	priv->state_tab = devm_memremap(dev, base, state_sz, MEMREMAP_WB);
++	if (IS_ERR(priv->state_tab))
++		return PTR_ERR(priv->state_tab);
++
++	priv->rw_pa = base + state_sz;
++	priv->rw_size = rw_sz;
++	priv->rw_va = devm_memremap(dev, priv->rw_pa, rw_sz, MEMREMAP_WB);
++	if (IS_ERR(priv->rw_va))
++		return PTR_ERR(priv->rw_va);
++
++    /* DMA ops initialization. */
++	spin_lock_init(&priv->alloc_lock);
++
++	chunk_size = priv->rw_size / IVSHMEM_PREFERRED_ALLOC_CHUNKS;
++	if (chunk_size < SMP_CACHE_BYTES)
++		chunk_size = SMP_CACHE_BYTES;
++	if (chunk_size > PAGE_SIZE)
++		chunk_size = PAGE_SIZE;
++	priv->alloc_shift = get_custom_order(chunk_size, 0);
++
++	chunks = priv->rw_size >> priv->alloc_shift;
++	bitmap_size = BITS_TO_LONGS(chunks) * sizeof(long);
++
++	priv->alloc_bitmap = devm_kzalloc(&(priv->pdev)->dev,
++					    bitmap_size,
++					    GFP_KERNEL);
++	if (!priv->alloc_bitmap)
++		return -ENOMEM;
++
++	/* Mark the first PAGE Bytes as used since they are used   */
++    /* for the resource table. This needs to be fixed better.  */
++	/* Don't just use a fixed number extracted from somewhere. */
++	bitmap_set(priv->alloc_bitmap, 0,
++		   1 << get_custom_order(PAGE_SIZE, priv->alloc_shift));
++
++	priv->map_src_addr = devm_kzalloc(&(priv->pdev)->dev,
++					    chunks * sizeof(void *),
++					    GFP_KERNEL);
++	if (!priv->map_src_addr)
++		return -ENOMEM;
++
++	set_dma_ops(&(priv->pdev)->dev, &mtk_jh_dma_ops);
++
++	dev_dbg(dev, "state table at %pa, rw section at %pa size %zu\n",
++		&base, &priv->rw_pa, priv->rw_size);
++
++	return 0;
++}
++
++static int mtk_jh_rproc_probe(struct pci_dev *pdev,
++			      const struct pci_device_id *id)
++{
++	struct device *dev = &pdev->dev;
++	struct mtk_jh_rproc *priv;
++	struct rproc *rproc;
++	u32 max_peers;
++	int ret;
++
++	ret = pcim_enable_device(pdev);
++	if (ret)
++		return ret;
++
++	ret = pcim_iomap_regions(pdev, BIT(0), MTK_JH_RPROC_DRV);
++	if (ret) {
++		dev_err(dev, "cannot map the register BAR: %d\n", ret);
++		return ret;
++	}
++
++	rproc = rproc_alloc(dev, dev_name(dev), &mtk_jh_rproc_ops, NULL,
++			    sizeof(*priv));
++	if (!rproc)
++		return -ENOMEM;
++
++	priv = rproc->priv;
++	priv->rproc = rproc;
++	priv->pdev = pdev;
++	priv->regs = pcim_iomap_table(pdev)[0];
++
++	priv->this_id = readl(&priv->regs->id);
++	max_peers = readl(&priv->regs->max_peers);
++	if (max_peers != 2) {
++		dev_err(dev, "expected a two-peer link, found %u peers\n",
++			max_peers);
++		ret = -EINVAL;
++		goto free_rproc;
++	}
++
++	/* with two peers the remote is simply the other one */
++	priv->peer_id = !priv->this_id;
++
++	ret = mtk_jh_rproc_map_shmem(priv);
++	if (ret)
++		goto free_rproc;
++
++	ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_LEGACY | PCI_IRQ_MSIX);
++	if (ret < 0) {
++		dev_err(dev, "cannot allocate an interrupt: %d\n", ret);
++		goto free_rproc;
++	}
++	priv->irq = pci_irq_vector(pdev, 0);
++
++    /* Initialize the IRQ work queue. */
++	INIT_WORK(&priv->irq_work, mtk_jh_irq_work);
++
++	/*
++	 * Registering in RPROC_DETACHED makes the core take the attach path;
++	 * with auto_boot set it attaches as soon as the rproc is added, and
++	 * never asks for firmware.
++	 */
++	rproc->state = RPROC_DETACHED;
++	rproc->auto_boot = false;
++
++	pci_set_drvdata(pdev, rproc);
++
++	ret = rproc_add(rproc);
++	if (ret) {
++		dev_err(dev, "rproc_add failed: %d\n", ret);
++		goto free_vectors;
++	}
++
++	dev_info(dev, "peer %u of %u, IPC-only: never loads or starts the remote\n",
++		 priv->this_id, max_peers);
++
++	return 0;
++
++free_vectors:
++	pci_free_irq_vectors(pdev);
++free_rproc:
++	rproc_free(rproc);
++
++	return ret;
++}
++
++static void mtk_jh_rproc_remove(struct pci_dev *pdev)
++{
++	struct rproc *rproc = pci_get_drvdata(pdev);
++	struct mtk_jh_rproc *priv = rproc->priv;
++
++	/*
++	 * Detach explicitly if still attached, so the inmate observes our
++	 * state going away while the doorbell is still live.  rproc_del()
++	 * would do this too, but doing it here keeps the ordering obvious.
++	 */
++	if (rproc->state == RPROC_ATTACHED)
++		rproc_detach(rproc);
++
++	rproc_del(rproc);
++
++	writel(0, &priv->regs->int_control);
++	pci_free_irq_vectors(pdev);
++	rproc_free(rproc);
++}
++
++static const struct pci_device_id mtk_jh_rproc_ids[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_SIEMENS, PCI_DEVICE_ID_IVSHMEM),
++	  (PCI_CLASS_OTHERS << 16) | IVSHM_PROTO_UNDEFINED, 0xffffff },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(pci, mtk_jh_rproc_ids);
++
++static struct pci_driver mtk_jh_rproc_driver = {
++	.name		= MTK_JH_RPROC_DRV,
++	.id_table	= mtk_jh_rproc_ids,
++	.probe		= mtk_jh_rproc_probe,
++	.remove		= mtk_jh_rproc_remove,
++};
++
++static int __init mtk_jh_rproc_init(void)
++{
++	int ret;
++
++	/* Initialize the work queue used to process IRQ's. */
++	mtk_jh_irq_wq = alloc_workqueue("mtk_jh_irq_wq", 0, 0);
++	if (!mtk_jh_irq_wq)
++		return -ENOMEM;
++
++	ret = pci_register_driver(&mtk_jh_rproc_driver);
++	if (ret)
++		destroy_workqueue(mtk_jh_irq_wq);
++
++	return ret;
++}
++
++static void __exit mtk_jh_rproc_exit(void)
++{
++	pci_unregister_driver(&mtk_jh_rproc_driver);
++
++	destroy_workqueue(mtk_jh_irq_wq);
++}
++
++module_init(mtk_jh_rproc_init);
++module_exit(mtk_jh_rproc_exit);
++
++MODULE_DESCRIPTION("MediaTek Genio remoteproc driver for a Jailhouse inmate");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+

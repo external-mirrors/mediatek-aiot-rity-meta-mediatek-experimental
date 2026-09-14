@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/*
+ * Copyright (c) 2026 MediaTek Inc.
+ * Author: Felix Freimann <felix.freimann@mediatek.com>
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			memory@40000000 {
+				device_type = "memory";
+				/*
+				 * Two windows are withheld from Linux entirely,
+				 * by splitting the DRAM range around them:
+				 *
+				 *   0x6ac00000 - 0x6b000000   4 MB   hypervisor
+				 *   0x6b800000 - 0x6ba00000   2 MB   vPCI window
+				 *
+				 * The ivshmem shared memory is a third, separate
+				 * region -- see the reserved-memory node below.
+				 * The ranges here total 8 GB.
+				 */
+				reg = <0 0x40000000 0x0 0x2ac00000
+				       0 0x6b000000 0x0 0x00800000
+				       0 0x6ba00000 0x1 0x94600000>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/reserved-memory";
+		__overlay__ {
+			/*
+			 * ivshmem shared memory, 0x6ba00000 - 0x6bb00000 (1 MB).
+			 * Distinct from the 2 MB vPCI window above.  This region
+			 * sits inside the third mapped range rather than in a
+			 * hole, so no-map is what keeps Linux out of it.
+			 */
+			jh_vpci_shm: memory@6ba00000 {
+				reg = <0 0x6ba00000 0 0x00100000>;
+				no-map;
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&uart2>;
+		__overlay__ {
+			pinctrl-0 = <&uart2_pins>;
+			pinctrl-names = "default";
+			dmas = <0>;
+			dma-names = "";
+			status = "okay";
+		};
+	};
+};

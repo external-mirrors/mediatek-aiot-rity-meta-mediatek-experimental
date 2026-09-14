@@ -23,8 +23,8 @@ BRANCH = "MTK-Genio"
 
 SRC_URI = " \
     git://github.com/ffreimann-mtk/jailhouse.git;protocol=https;branch=${BRANCH} \
-    file://0001-Create-patchable-CONFIG_INMATE_BASE-define.patch \
     file://0001-LF-10135-driver-update-the-use-of-of_overlay_fdt_app.patch \
+    file://0001-Create-patchable-CONFIG_INMATE_BASE-define.patch \
     file://config.h \
 "
 

@@ -25,3 +25,11 @@ SRC_URI:append:genio-720-evk = " \
 	file://camera-single-csi0.dts \
 	file://camera-single-csi1.dts \
 "
+
+SRC_URI:append:genio-510-evk = " \
+	${@bb.utils.contains('IMAGE_INSTALL', 'jailhouse', 'file://6.6-Genio-510-Jailhouse-DT.dts', '', d)} \
+"
+
+SRC_URI:append:genio-700-evk = " \
+	${@bb.utils.contains('IMAGE_INSTALL', 'jailhouse', 'file://6.6-Genio-700-Jailhouse-DT.dts', '', d)} \
+"
